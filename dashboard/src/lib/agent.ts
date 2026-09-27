@@ -35,7 +35,7 @@ import {
   slugifyItem,
   type ProductOption,
 } from "./tools/shopping";
-import { getOwnerPhone, sendSms } from "./sms";
+import { getOwnerPhone, sendToOwner } from "./sms";
 
 export type Reply = { body: string; quickReplies?: string[]; cards?: ProductCard[] };
 export type AgentResult = { replies: Reply[]; actions: string[] };
@@ -456,7 +456,7 @@ async function llmStructured<S extends z.ZodType>(
   }
 }
 
-const SYSTEM = `You are OYOI, the ops assistant for Tony's Pizzeria, working over SMS.
+const SYSTEM = `You are OYI, the ops assistant for Tony's Pizzeria, working over SMS and the web dashboard.
 Always follow Tony's enshrined workflows and learned preferences from the brain context.
 Only use these step types:
 - order: a website order that follows an order workflow (give the workflow slug and quantity)
@@ -738,7 +738,7 @@ async function presentOptions(
         summary: `Pick a ${previous.baseQuery}`,
         payload: JSON.stringify(previous),
       });
-      await sendSms(
+      await sendToOwner(
         to,
         `That's all I found for ${query}. Pick one of the options above, or describe what you want differently.`,
         {
@@ -752,7 +752,7 @@ async function presentOptions(
       status: "failed",
       result: JSON.stringify({ error: "No results" }),
     });
-    await sendSms(to, `Couldn't find ${pluralize(baseQuery)} online. Want to try a different name?`);
+    await sendToOwner(to, `Couldn't find ${pluralize(baseQuery)} online. Want to try a different name?`);
     return;
   }
 
@@ -777,7 +777,7 @@ async function presentOptions(
     offset > 0
       ? `Here are ${options.length} more. Which one do you like?`
       : `Here are ${options.length} ${options.length === 1 ? "option" : "options"} for ${label}. Which one do you like?`;
-  await sendSms(to, body, {
+  await sendToOwner(to, body, {
     quickReplies: choiceButtons(options, hasMore),
     cards: toCards(options),
   });
@@ -873,7 +873,7 @@ async function runAddToCart(
     }),
   });
 
-  await sendSms(
+  await sendToOwner(
     from,
     `Adding the ${product.title} (${product.price}, ${product.source}) to the cart now. I'll stop before payment.`
   );
@@ -889,7 +889,7 @@ async function runAddToCart(
       status: "failed",
       result: JSON.stringify({ cart: result, product }),
     });
-    await sendSms(
+    await sendToOwner(
       from,
       `Couldn't finish adding it to the cart${result.error ? ` (${result.error})` : ""}. Here's the link to add it yourself:\n${product.link}`
     );
@@ -913,7 +913,7 @@ async function runAddToCart(
   });
 
   const mockNote = result.mocked ? " (demo mode — open the link to finish)" : "";
-  await sendSms(
+  await sendToOwner(
     from,
     `Added to your ${product.source} cart${mockNote}. Finish checkout here:\n${cartUrl}`
   );
@@ -1658,6 +1658,9 @@ export async function runDueCheckups(): Promise<{ text: string; sent: boolean; i
   const reply = offer?.replies[0];
   if (!reply) return { text: nextUpSummary(inventory), sent: false, items: [] };
 
-  await sendSms(getOwnerPhone(), reply.body, { quickReplies: reply.quickReplies });
+  await sendToOwner(getOwnerPhone(), reply.body, {
+    quickReplies: reply.quickReplies,
+    channel: "sms",
+  });
   return { text: reply.body, sent: true, items: due.map((i) => i.name) };
 }

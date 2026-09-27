@@ -1,12 +1,12 @@
 import cron from "node-cron";
 import { runDueCheckups } from "./agent";
 
-type GlobalSched = { __oyoiSchedulerStarted?: boolean };
+type GlobalSched = { __oyiSchedulerStarted?: boolean };
 
 export function startScheduler() {
   const g = globalThis as unknown as GlobalSched;
-  if (g.__oyoiSchedulerStarted) return;
-  g.__oyoiSchedulerStarted = true;
+  if (g.__oyiSchedulerStarted) return;
+  g.__oyiSchedulerStarted = true;
 
   // 8:00 AM local time daily: text Tony about any items whose check-up is due
   cron.schedule("0 8 * * *", async () => {

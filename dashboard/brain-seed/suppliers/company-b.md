@@ -12,4 +12,4 @@ Orders placed on their web storefront with the card on file ending in 4242. Typi
 Catalog includes mozzarella, flour, tomato sauce, olive oil.
 
 ## Timeline
-- 2026-09-01: Set as primary web supplier in OYOI
+- 2026-09-01: Set as primary web supplier in OYI

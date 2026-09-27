@@ -4,137 +4,135 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-type ProductCard = {
-  title: string;
-  price: string;
-  source: string;
-  link: string;
-  imageUrl?: string;
-  label?: string;
-};
-
-type Message = {
-  id: string;
-  direction: "inbound" | "outbound";
-  body: string;
-  quick_replies: string[] | null;
-  cards: ProductCard[] | null;
-  created_at: string;
-};
-
 const NAV = [
-  { href: "/", label: "Inventory" },
+  { href: "/", label: "Overview" },
+  { href: "/inventory", label: "Inventory" },
+  { href: "/chat", label: "Chat" },
   { href: "/workflows", label: "Workflows" },
-  { href: "/actions", label: "Actions" },
-  { href: "/brain", label: "Brain" },
+  { href: "/activity", label: "Activity" },
 ];
 
-function linkify(text: string): ReactNode[] {
-  const parts = text.split(/(https?:\/\/[^\s]+)/g);
-  return parts.map((part, i) =>
-    part.startsWith("http") ? (
-      <a key={i} href={part} target="_blank" rel="noreferrer" className="bubble-link">
-        {part.replace(/^https?:\/\//, "").slice(0, 42)}
-        {part.length > 50 ? "…" : ""}
-      </a>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
+const TITLES: Record<string, string> = {
+  "/": "Overview",
+  "/inventory": "Inventory",
+  "/chat": "Chat",
+  "/workflows": "Workflows",
+  "/activity": "Activity",
+  "/brain": "Brain",
+};
+
+function formatDemoDay(iso: string) {
+  return new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
-export function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
   const [clock, setClock] = useState<{ today: string; offsetDays: number } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const threadRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [chatUnread, setChatUnread] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const lastSeenMsg = useRef<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refreshClock = useCallback(async () => {
     try {
-      const [msgRes, clockRes] = await Promise.all([fetch("/api/messages"), fetch("/api/demo/clock")]);
-      const data = await msgRes.json();
-      setMessages(data.messages || []);
-      setClock(await clockRes.json());
+      const res = await fetch("/api/demo/clock");
+      setClock(await res.json());
     } catch {
       /* ignore */
     }
   }, []);
 
+  const pollChat = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat");
+      const data = await res.json();
+      const msgs = data.messages || [];
+      const last = msgs[msgs.length - 1];
+      if (!last) return;
+      if (pathname === "/chat") {
+        lastSeenMsg.current = last.id;
+        setChatUnread(false);
+      } else if (lastSeenMsg.current && last.id !== lastSeenMsg.current && last.direction === "outbound") {
+        setChatUnread(true);
+      } else if (!lastSeenMsg.current) {
+        lastSeenMsg.current = last.id;
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [pathname]);
+
   useEffect(() => {
-    const first = setTimeout(refresh, 0);
-    const t = setInterval(refresh, 2000);
+    const first = setTimeout(() => {
+      void refreshClock();
+      void pollChat();
+    }, 0);
+    const t = setInterval(() => {
+      void refreshClock();
+      void pollChat();
+    }, 3000);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [refresh]);
+  }, [refreshClock, pollChat]);
 
-  const lastCardCount = messages[messages.length - 1]?.cards?.length ?? 0;
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length, lastCardCount]);
+    if (pathname === "/chat") {
+      const t = setTimeout(() => setChatUnread(false), 0);
+      return () => clearTimeout(t);
+    }
+  }, [pathname]);
 
-  async function send(text: string) {
-    if (!text.trim() || busy) return;
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  async function runDemo(url: string, body?: object) {
     setBusy(true);
+    setMenuOpen(false);
     try {
-      await fetch("/api/actions", {
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: text }),
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
       });
-      setDraft("");
-      await refresh();
+      const data = (await res.json()) as { sent?: boolean; text?: string; ok?: boolean };
+      if (data.text && !data.sent) setToast(data.text);
+      else if (data.ok) setToast("Demo reset.");
+      else if (data.sent && data.text) setToast("Check-up sent — open Chat to reply.");
+      await refreshClock();
+      await pollChat();
     } finally {
       setBusy(false);
     }
   }
 
-  async function runCheckups(url: string) {
-    setBusy(true);
-    setNotice(null);
-    try {
-      const res = await fetch(url, { method: "POST" });
-      const data = (await res.json()) as { sent?: boolean; text?: string };
-      if (!data.sent && data.text) setNotice(data.text);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function resetDemo() {
-    setBusy(true);
-    setNotice(null);
-    try {
-      await fetch("/api/demo/reset", { method: "POST" });
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const demoDate = clock
-    ? new Date(`${clock.today}T12:00:00Z`).toLocaleDateString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        timeZone: "UTC",
-      })
-    : "";
-
-  const last = messages[messages.length - 1];
-  const buttons = last?.direction === "outbound" ? last.quick_replies ?? [] : [];
+  const title = TITLES[pathname] || "OYI";
 
   return (
     <div className="app-shell">
-      <aside className="side-nav">
+      <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">OYOI</span>
-          <span className="brand-sub">Restaurant SMS Ops</span>
+          <span className="brand-mark">OYI</span>
+          <span className="brand-sub">Restaurant ops</span>
         </div>
         <nav>
           {NAV.map((item) => (
@@ -144,115 +142,53 @@ export function Shell({ children }: { children: React.ReactNode }) {
               className={pathname === item.href ? "nav-link active" : "nav-link"}
             >
               {item.label}
+              {item.href === "/chat" && chatUnread ? <span className="nav-dot" /> : null}
             </Link>
           ))}
         </nav>
-        <div className="side-note">
-          <p>Demo restaurant: Tony&apos;s Pizzeria</p>
-          <button className="link-btn" onClick={resetDemo} disabled={busy}>
-            Reset demo
-          </button>
+        <div className="sidebar-foot">
+          <div className="muted">Tony&apos;s Pizzeria</div>
         </div>
       </aside>
 
-      <main className="main-pane">{children}</main>
-
-      <aside className="phone-pane">
-        <div className="phone-header">
-          <div>
-            <strong>Owner phone</strong>
-            <div className="muted">SMS mirror</div>
-          </div>
-          <button className="btn btn-accent" onClick={() => runCheckups("/api/checkin")} disabled={busy}>
-            Run check-in
-          </button>
-        </div>
-        <div className="demo-clock">
-          <span>
-            Demo day: <strong>{demoDate || "…"}</strong>
-            {clock && clock.offsetDays > 0 ? ` (+${clock.offsetDays})` : ""}
-          </span>
-          <button className="btn" onClick={() => runCheckups("/api/demo/advance")} disabled={busy}>
-            Fast-forward a day
-          </button>
-        </div>
-        {notice && <div className="demo-notice">{notice}</div>}
-        <div className="thread" ref={threadRef}>
-          {messages.length === 0 && (
-            <p className="muted empty">No messages yet. Run a check-in or text the agent.</p>
-          )}
-          {messages.map((m) => (
-            <div key={m.id}>
-              <div
-                className={m.direction === "inbound" ? "bubble inbound" : "bubble outbound"}
-              >
-                <div className="bubble-body">{linkify(m.body)}</div>
-                <time>{new Date(m.created_at).toLocaleTimeString()}</time>
-              </div>
-              {m.direction === "outbound" && m.cards && m.cards.length > 0 && (
-                <div className="product-cards">
-                  {m.cards.map((c, i) => (
-                    <a
-                      key={`${m.id}-${i}`}
-                      className="product-card"
-                      href={c.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => {
-                        // Tapping the card in the mirror also selects that product
-                        if (m.id === last?.id) {
-                          e.preventDefault();
-                          void send(c.label || String(i + 1));
-                        }
-                      }}
-                    >
-                      {c.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={c.imageUrl} alt="" className="product-card-img" />
-                      ) : (
-                        <div className="product-card-img placeholder">{i + 1}</div>
-                      )}
-                      <div className="product-card-body">
-                        <div className="product-card-title">{c.title}</div>
-                        <div className="product-card-meta">
-                          <strong>{c.price}</strong>
-                          <span>{c.source}</span>
-                        </div>
-                      </div>
-                    </a>
-                  ))}
+      <div className="shell-main">
+        <header className="topbar">
+          <h1 className="topbar-title">{title}</h1>
+          <div className="topbar-actions">
+            {clock && (
+              <span className="demo-chip">
+                Demo day <strong>{formatDemoDay(clock.today)}</strong>
+                {clock.offsetDays > 0 ? ` · +${clock.offsetDays}` : ""}
+              </span>
+            )}
+            <div className="demo-menu" ref={menuRef}>
+              <button className="btn" onClick={() => setMenuOpen((o) => !o)} disabled={busy}>
+                Demo
+              </button>
+              {menuOpen && (
+                <div className="demo-menu-panel">
+                  <button onClick={() => runDemo("/api/demo/advance", { days: 1 })} disabled={busy}>
+                    Fast-forward a day
+                  </button>
+                  <button onClick={() => runDemo("/api/checkin")} disabled={busy}>
+                    Run check-ups now
+                  </button>
+                  <Link href="/brain" onClick={() => setMenuOpen(false)}>
+                    View brain (backend)
+                  </Link>
+                  <button className="danger" onClick={() => runDemo("/api/demo/reset")} disabled={busy}>
+                    Reset demo
+                  </button>
                 </div>
               )}
             </div>
-          ))}
-          {buttons.length > 0 && (
-            <div className="quick-replies">
-              {buttons.map((label) => (
-                <button
-                  key={label}
-                  className="quick-reply"
-                  onClick={() => send(label)}
-                  disabled={busy}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-          {busy && <div className="typing">OYOI is typing…</div>}
-        </div>
-        <div className="composer">
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send(draft)}
-            placeholder="Text OYOI…"
-          />
-          <button className="btn" onClick={() => send(draft)} disabled={busy}>
-            Send
-          </button>
-        </div>
-      </aside>
+          </div>
+        </header>
+
+        <div className={pathname === "/chat" ? "page-body chat-body" : "page-body"}>{children}</div>
+      </div>
+
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }

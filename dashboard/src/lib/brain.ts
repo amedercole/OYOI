@@ -126,19 +126,19 @@ function gbrainPut(slug: string, content: string): Promise<void> {
 // PGLite only allows one process at a time, so GBrain writes drain one at a time in the
 // background instead of blocking the SMS reply. Pending writes to the same page collapse
 // into the latest content.
-type GlobalQueue = { __oyoiGbrainPending?: Map<string, string>; __oyoiGbrainDraining?: boolean };
+type GlobalQueue = { __oyiGbrainPending?: Map<string, string>; __oyiGbrainDraining?: boolean };
 
 function queueGbrainPut(slug: string, content: string) {
   const g = globalThis as unknown as GlobalQueue;
-  g.__oyoiGbrainPending ??= new Map();
-  g.__oyoiGbrainPending.set(slug, content);
-  if (!g.__oyoiGbrainDraining) void drainGbrainQueue(g);
+  g.__oyiGbrainPending ??= new Map();
+  g.__oyiGbrainPending.set(slug, content);
+  if (!g.__oyiGbrainDraining) void drainGbrainQueue(g);
 }
 
 async function drainGbrainQueue(g: GlobalQueue) {
-  g.__oyoiGbrainDraining = true;
+  g.__oyiGbrainDraining = true;
   try {
-    const pending = g.__oyoiGbrainPending!;
+    const pending = g.__oyiGbrainPending!;
     while (pending.size > 0) {
       const [slug, content] = pending.entries().next().value as [string, string];
       pending.delete(slug);
@@ -147,7 +147,7 @@ async function drainGbrainQueue(g: GlobalQueue) {
       });
     }
   } finally {
-    g.__oyoiGbrainDraining = false;
+    g.__oyiGbrainDraining = false;
   }
 }
 

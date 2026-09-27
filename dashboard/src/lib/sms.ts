@@ -1,6 +1,6 @@
 import twilio from "twilio";
 import { randomUUID } from "crypto";
-import { logMessage, type ProductCard } from "./db";
+import { getLastOwnerChannel, logMessage, type MessageChannel, type ProductCard } from "./db";
 
 const DEMO_OWNER_PHONE = "+15555550100";
 
@@ -19,12 +19,14 @@ export function getOwnerPhone() {
   return process.env.OWNER_PHONE_NUMBER || DEMO_OWNER_PHONE;
 }
 
-export type SmsOptions = {
+export type SendOptions = {
   quickReplies?: string[];
   cards?: ProductCard[];
+  /** Force a channel; otherwise follow Tony's last inbound channel. */
+  channel?: MessageChannel;
 };
 
-function formatSmsBody(body: string, opts?: SmsOptions): string {
+function formatSmsBody(body: string, opts?: SendOptions): string {
   let text = body;
   if (opts?.cards?.length) {
     const lines = opts.cards.map(
@@ -38,31 +40,38 @@ function formatSmsBody(body: string, opts?: SmsOptions): string {
 }
 
 /**
- * Quick replies and product cards render in the dashboard phone mirror.
- * Plain SMS gets a numbered list / hint line instead.
+ * Reply to Tony on the right channel. Web replies are logged only (shown in /chat);
+ * SMS replies also go out through Twilio. Async agent follow-ups (shop results, etc.)
+ * omit `channel` and inherit wherever Tony last wrote from.
  */
-export async function sendSms(to: string, body: string, opts?: SmsOptions | string[]) {
-  // Back-compat: third arg used to be quickReplies string[]
-  const options: SmsOptions | undefined = Array.isArray(opts)
+export async function sendToOwner(to: string, body: string, opts?: SendOptions | string[]) {
+  const options: SendOptions | undefined = Array.isArray(opts)
     ? { quickReplies: opts }
     : opts;
 
+  const channel: MessageChannel = options?.channel ?? getLastOwnerChannel();
   const from = getTwilioPhone();
-  const c = client();
 
   logMessage({
     id: randomUUID(),
     direction: "outbound",
-    from_number: from || "oyoi",
+    from_number: from || "oyi",
     to_number: to,
     body,
+    channel,
     quick_replies: options?.quickReplies,
     cards: options?.cards,
   });
 
+  if (channel === "web") {
+    console.log(`[chat:web] -> ${to}: ${body}`);
+    return { sid: `web_${Date.now()}`, mocked: true, channel };
+  }
+
+  const c = client();
   if (!c || !from || to === DEMO_OWNER_PHONE) {
     console.log(`[sms:mock] -> ${to}: ${body}`);
-    return { sid: `mock_${Date.now()}`, mocked: true };
+    return { sid: `mock_${Date.now()}`, mocked: true, channel };
   }
 
   const msg = await c.messages.create({
@@ -70,8 +79,11 @@ export async function sendSms(to: string, body: string, opts?: SmsOptions | stri
     from,
     body: formatSmsBody(body, options),
   });
-  return { sid: msg.sid, mocked: false };
+  return { sid: msg.sid, mocked: false, channel };
 }
+
+/** @deprecated Prefer sendToOwner — kept as an alias for older call sites. */
+export const sendSms = sendToOwner;
 
 export function validateTwilioSignature(
   signature: string | null,

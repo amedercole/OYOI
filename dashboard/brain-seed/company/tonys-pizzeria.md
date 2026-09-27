@@ -10,6 +10,6 @@ Ordering preference: cheese and dry goods via Company B website; soda via email 
 Recently noted: switched pizza dough supplier last month; still evaluating oat milk for staff drinks.
 
 ## Timeline
-- 2026-09-01: Onboarded onto OYOI inventory agent
+- 2026-09-01: Onboarded onto OYI inventory agent
 - 2026-09-15: Wants a heads-up before mozzarella drops under ~5 lbs after weekend rushouts
 - 2026-09-20: Pepsi delivery currently scheduled for the 15th of each month

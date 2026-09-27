@@ -16,7 +16,7 @@ export async function sendEmail(input: {
   fromName?: string;
 }): Promise<EmailResult> {
   const preview = { to: input.to, subject: input.subject, body: input.body };
-  const fromName = input.fromName || "Tony's Pizzeria (OYOI Agent)";
+  const fromName = input.fromName || "Tony's Pizzeria (OYI Agent)";
 
   if (process.env.RESEND_API_KEY) {
     try {

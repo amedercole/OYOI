@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { handleInboundSms } from "@/lib/agent";
 import { logMessage } from "@/lib/db";
-import { sendSms, validateTwilioSignature } from "@/lib/sms";
+import { sendToOwner, validateTwilioSignature } from "@/lib/sms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     from_number: from,
     to_number: to,
     body,
+    channel: "sms",
   });
 
   setImmediate(() => {
@@ -41,15 +42,16 @@ export async function POST(req: NextRequest) {
       try {
         const result = await handleInboundSms(from, body);
         for (const reply of result.replies) {
-          await sendSms(from, reply.body, {
+          await sendToOwner(from, reply.body, {
             quickReplies: reply.quickReplies,
             cards: reply.cards,
+            channel: "sms",
           });
         }
       } catch (err) {
         console.error("[twilio/inbound] agent error", err);
         try {
-          await sendSms(from, "Sorry, hit a snag. Try again in a moment.");
+          await sendToOwner(from, "Sorry, hit a snag. Try again in a moment.", { channel: "sms" });
         } catch {
           /* ignore */
         }

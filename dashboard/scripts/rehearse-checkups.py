@@ -24,13 +24,14 @@ seen = set()
 
 
 def show_new_messages():
-    for m in call("/api/messages")["messages"]:
+    for m in call("/api/chat")["messages"]:
         if m["id"] in seen:
             continue
         seen.add(m["id"])
-        who = "TONY" if m["direction"] == "inbound" else "OYOI"
+        who = "TONY" if m["direction"] == "inbound" else "OYI"
         buttons = f"  [{' / '.join(m['quick_replies'])}]" if m.get("quick_replies") else ""
-        print(f"  {who}: {m['body']}{buttons}")
+        ch = m.get("channel", "?")
+        print(f"  {who}[{ch}]: {m['body']}{buttons}")
 
 
 def inventory(names=("Mozzarella",)):
@@ -51,7 +52,7 @@ def advance():
 
 def say(text):
     print(f"\n>>> Tony: {text}")
-    call("/api/actions", {"body": text})
+    call("/api/chat", {"body": text})
     time.sleep(0.5)
     show_new_messages()
 

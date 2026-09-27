@@ -3,7 +3,9 @@ import fs from "fs";
 import path from "path";
 
 const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "oyoi.sqlite");
+const DB_PATH = path.join(DATA_DIR, "oyi.sqlite");
+
+export type MessageChannel = "sms" | "web";
 
 export type ProductCard = {
   title: string;
@@ -20,6 +22,7 @@ export type MessageRow = {
   from_number: string;
   to_number: string;
   body: string;
+  channel: MessageChannel;
   quick_replies: string[] | null;
   cards: ProductCard[] | null;
   created_at: string;
@@ -44,11 +47,11 @@ export type ActionRunRow = {
   updated_at: string;
 };
 
-type GlobalDb = { __oyoiDb?: Database.Database };
+type GlobalDb = { __oyiDb?: Database.Database };
 
 function getDb(): Database.Database {
   const g = globalThis as unknown as GlobalDb;
-  if (g.__oyoiDb) return g.__oyoiDb;
+  if (g.__oyiDb) return g.__oyiDb;
 
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -91,17 +94,24 @@ function getDb(): Database.Database {
   if (!cols.some((c) => c.name === "cards")) {
     db.exec(`ALTER TABLE messages ADD COLUMN cards TEXT`);
   }
+  if (!cols.some((c) => c.name === "channel")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'sms'`);
+  }
 
-  g.__oyoiDb = db;
+  g.__oyiDb = db;
   return db;
 }
 
 export function resetDb() {
   const g = globalThis as unknown as GlobalDb;
-  g.__oyoiDb?.close();
-  g.__oyoiDb = undefined;
+  g.__oyiDb?.close();
+  g.__oyiDb = undefined;
   for (const suffix of ["", "-wal", "-shm"]) {
     fs.rmSync(`${DB_PATH}${suffix}`, { force: true });
+  }
+  // Clean up legacy filename from the OYOI rename
+  for (const suffix of ["", "-wal", "-shm"]) {
+    fs.rmSync(path.join(DATA_DIR, `oyoi.sqlite${suffix}`), { force: true });
   }
 }
 
@@ -111,17 +121,19 @@ export function logMessage(msg: {
   from_number: string;
   to_number: string;
   body: string;
+  channel?: MessageChannel;
   quick_replies?: string[];
   cards?: ProductCard[];
 }) {
   const created_at = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO messages (id, direction, from_number, to_number, body, quick_replies, cards, created_at)
-       VALUES (@id, @direction, @from_number, @to_number, @body, @quick_replies, @cards, @created_at)`
+      `INSERT INTO messages (id, direction, from_number, to_number, body, channel, quick_replies, cards, created_at)
+       VALUES (@id, @direction, @from_number, @to_number, @body, @channel, @quick_replies, @cards, @created_at)`
     )
     .run({
       ...msg,
+      channel: msg.channel ?? "sms",
       quick_replies: msg.quick_replies?.length ? JSON.stringify(msg.quick_replies) : null,
       cards: msg.cards?.length ? JSON.stringify(msg.cards) : null,
       created_at,
@@ -132,16 +144,28 @@ export function listMessages(limit = 100): MessageRow[] {
   const rows = getDb()
     .prepare(`SELECT * FROM messages ORDER BY created_at ASC LIMIT ?`)
     .all(limit) as Array<
-    Omit<MessageRow, "quick_replies" | "cards"> & {
+    Omit<MessageRow, "quick_replies" | "cards" | "channel"> & {
       quick_replies: string | null;
       cards: string | null;
+      channel: string | null;
     }
   >;
   return rows.map((r) => ({
     ...r,
+    channel: (r.channel === "web" ? "web" : "sms") as MessageChannel,
     quick_replies: r.quick_replies ? (JSON.parse(r.quick_replies) as string[]) : null,
     cards: r.cards ? (JSON.parse(r.cards) as ProductCard[]) : null,
   }));
+}
+
+/** Channel Tony last wrote from — drives where async agent replies go. Defaults to SMS. */
+export function getLastOwnerChannel(): MessageChannel {
+  const row = getDb()
+    .prepare(
+      `SELECT channel FROM messages WHERE direction = 'inbound' ORDER BY created_at DESC LIMIT 1`
+    )
+    .get() as { channel: string } | undefined;
+  return row?.channel === "web" ? "web" : "sms";
 }
 
 export function createActionRun(input: {
