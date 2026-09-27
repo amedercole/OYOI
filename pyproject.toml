@@ -188,7 +188,7 @@ exclude = ["**/__pycache__", "**/*.pyc"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["extensions/**/skills/**", ".worktrees"]
+extend-exclude = ["extensions/**/skills/**", ".worktrees", "dashboard"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "ASYNC", "PTH", "RUF", "TID", "ERA", "C901"]
