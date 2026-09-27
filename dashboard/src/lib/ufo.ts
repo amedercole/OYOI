@@ -80,7 +80,50 @@ function parseDirectives(body: string): { verb: string; fields: string[] }[] {
 }
 
 function unescapeField(value: string): string {
-  return value.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\\\/g, "\\");
+  return value.replace(/\\([\\nt])/g, (_, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : "\\"));
+}
+
+function agentText(verb: string, fields: string[]): string | null {
+  if (verb === "say") return fields[0] ? unescapeField(fields[0]) : null;
+  if (verb !== "frame" || fields[0] !== "terminal" || !fields[1]) return null;
+  const { text } = JSON.parse(unescapeField(fields[1])) as { text: string | null };
+  return text || null;
+}
+
+function threadMessages(text: string, idPrefix: string, channel: ChatMessage["channel"]): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  let seq = 0;
+  for (const { verb, fields } of parseDirectives(text)) {
+    if (verb === "since" || verb === "listen" || verb === "ask" || verb === "poll") break;
+    const said = verb === "you" && fields[0] ? unescapeField(fields[0]) : agentText(verb, fields);
+    if (said === null) continue;
+    messages.push({
+      id: `${idPrefix}-${seq++}`,
+      direction: verb === "you" ? "inbound" : "outbound",
+      body: said,
+      channel,
+      created_at: new Date().toISOString(),
+    });
+  }
+  return messages;
+}
+
+async function replay(path: string): Promise<string> {
+  const { base } = config();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "text/plain" }),
+      body: "",
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    return await readStream(res);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readStream(res: Response): Promise<string> {
@@ -117,7 +160,8 @@ async function holdChat(
     let done = false;
     let poll = false;
     for (const { verb, fields } of lines) {
-      if (verb === "say" && fields[0]) says.push(unescapeField(fields[0]));
+      const said = agentText(verb, fields);
+      if (said !== null) says.push(said);
       if (verb === "you" && fields[0]) yous.push(unescapeField(fields[0]));
       if (verb === "since" && fields[0] && fields[1] !== undefined) {
         nextSince = { turnId: fields[0], cursor: fields[1] };
@@ -153,93 +197,11 @@ export async function listConversations(): Promise<ConversationRow[]> {
 }
 
 export async function readThread(conversationId: string): Promise<ChatMessage[]> {
-  const path = `/surface/ufo/conversation/${conversationId}`;
-  const { base } = config();
-  const headers = authHeaders({ "content-type": "text/plain" });
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers,
-      body: "",
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    const text = await readStream(res);
-    const lines = parseDirectives(text);
-    const messages: ChatMessage[] = [];
-    let seq = 0;
-    for (const { verb, fields } of lines) {
-      if (verb === "since" || verb === "listen" || verb === "ask" || verb === "poll") break;
-      if (verb === "you" && fields[0]) {
-        messages.push({
-          id: `${conversationId}-you-${seq++}`,
-          direction: "inbound",
-          body: unescapeField(fields[0]),
-          channel: "sms",
-          created_at: new Date().toISOString(),
-        });
-      }
-      if (verb === "say" && fields[0]) {
-        messages.push({
-          id: `${conversationId}-say-${seq++}`,
-          direction: "outbound",
-          body: unescapeField(fields[0]),
-          channel: "sms",
-          created_at: new Date().toISOString(),
-        });
-      }
-    }
-    return messages;
-  } finally {
-    clearTimeout(timer);
-  }
+  return threadMessages(await replay(`/surface/ufo/conversation/${conversationId}`), conversationId, "sms");
 }
 
 export async function readDashboardThread(): Promise<ChatMessage[]> {
-  const path = `/surface/ufo/${DASHBOARD_CHANNEL}`;
-  const { base } = config();
-  const headers = authHeaders({ "content-type": "text/plain" });
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers,
-      body: "",
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    const text = await readStream(res);
-    const lines = parseDirectives(text);
-    const messages: ChatMessage[] = [];
-    let seq = 0;
-    for (const { verb, fields } of lines) {
-      if (verb === "since" || verb === "listen" || verb === "ask" || verb === "poll") break;
-      if (verb === "you" && fields[0]) {
-        messages.push({
-          id: `dashboard-you-${seq++}`,
-          direction: "inbound",
-          body: unescapeField(fields[0]),
-          channel: "web",
-          created_at: new Date().toISOString(),
-        });
-      }
-      if (verb === "say" && fields[0]) {
-        messages.push({
-          id: `dashboard-say-${seq++}`,
-          direction: "outbound",
-          body: unescapeField(fields[0]),
-          channel: "web",
-          created_at: new Date().toISOString(),
-        });
-      }
-    }
-    return messages;
-  } finally {
-    clearTimeout(timer);
-  }
+  return threadMessages(await replay(`/surface/ufo/${DASHBOARD_CHANNEL}`), DASHBOARD_CHANNEL, "web");
 }
 
 export async function getInventory(): Promise<InventoryView> {
