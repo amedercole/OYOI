@@ -254,6 +254,37 @@ textarea {
   overflow: hidden;
 }
 
+.chat-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+
+.chat-pane:last-child {
+  border-right: none;
+}
+
+@media (max-width: 900px) {
+  .chat-split {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .chat-pane {
+    min-height: 55vh;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
 /* ---------- Typography / headers ---------- */
 
 .page-header {
