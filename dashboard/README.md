@@ -8,9 +8,9 @@ SQLite.
 
 | Page | Source |
 | --- | --- |
-| Overview | `GET /ext/restaurant_inventory/inventory` plus recent chat |
+| Overview | `GET /ext/restaurant_inventory/inventory` plus recent chats |
 | Inventory | Same inventory projection |
-| Chat | Web thread via `POST /surface/ufo/dashboard`; WhatsApp thread joined read-only |
+| Chat | Chats from `GET /surface/ufo/conversations`; each web chat is a channel `POST /surface/ufo/web-<uuid>`, the WhatsApp thread is joined read-only |
 
 Demo menu: **Run check-ups now** (posts into the web chat) and **Open ufo debugger**.
 

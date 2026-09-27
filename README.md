@@ -188,8 +188,8 @@ cp .env.local.example .env.local
 npm install && npm run dev
 ```
 
-Overview and Inventory read `GET /ext/restaurant_inventory/inventory`. Chat has a web pane (postable)
-and a WhatsApp pane (read-only). Demo → **Run check-ups now** asks the agent to queue
+Overview and Inventory read `GET /ext/restaurant_inventory/inventory`. Chat lists every web chat (New chat
+opens another) beside the WhatsApp thread (read-only); all share one agent, inventory, and memory. Demo → **Run check-ups now** asks the agent to queue
 `inventory_checkup_now`; the minute job texts WhatsApp.
 
 ### Friend laptop after the `dashboard/` move
