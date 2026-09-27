@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
 
   const result = await handleInboundSms(from, text);
   for (const reply of result.replies) {
-    await sendSms(from, reply.body, reply.quickReplies);
+    await sendSms(from, reply.body, {
+      quickReplies: reply.quickReplies,
+      cards: reply.cards,
+    });
   }
 
   return NextResponse.json(result);

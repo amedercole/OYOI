@@ -1,6 +1,6 @@
 import twilio from "twilio";
 import { randomUUID } from "crypto";
-import { logMessage } from "./db";
+import { logMessage, type ProductCard } from "./db";
 
 const DEMO_OWNER_PHONE = "+15555550100";
 
@@ -19,12 +19,34 @@ export function getOwnerPhone() {
   return process.env.OWNER_PHONE_NUMBER || DEMO_OWNER_PHONE;
 }
 
+export type SmsOptions = {
+  quickReplies?: string[];
+  cards?: ProductCard[];
+};
+
+function formatSmsBody(body: string, opts?: SmsOptions): string {
+  let text = body;
+  if (opts?.cards?.length) {
+    const lines = opts.cards.map(
+      (c, i) => `${i + 1}) ${c.title} — ${c.price} @ ${c.source}\n${c.link}`
+    );
+    text = `${body}\n\n${lines.join("\n\n")}\n\n(reply 1, 2, 3 or describe what you want)`;
+  } else if (opts?.quickReplies?.length) {
+    text = `${body}\n\n(${opts.quickReplies.join(" / ")})`;
+  }
+  return text;
+}
+
 /**
- * Quick replies render as tappable buttons in the dashboard phone mirror.
- * Plain SMS has no buttons, so real texts get them as a short hint line instead;
- * the agent understands free-form replies either way.
+ * Quick replies and product cards render in the dashboard phone mirror.
+ * Plain SMS gets a numbered list / hint line instead.
  */
-export async function sendSms(to: string, body: string, quickReplies?: string[]) {
+export async function sendSms(to: string, body: string, opts?: SmsOptions | string[]) {
+  // Back-compat: third arg used to be quickReplies string[]
+  const options: SmsOptions | undefined = Array.isArray(opts)
+    ? { quickReplies: opts }
+    : opts;
+
   const from = getTwilioPhone();
   const c = client();
 
@@ -34,7 +56,8 @@ export async function sendSms(to: string, body: string, quickReplies?: string[])
     from_number: from || "oyoi",
     to_number: to,
     body,
-    quick_replies: quickReplies,
+    quick_replies: options?.quickReplies,
+    cards: options?.cards,
   });
 
   if (!c || !from || to === DEMO_OWNER_PHONE) {
@@ -42,8 +65,11 @@ export async function sendSms(to: string, body: string, quickReplies?: string[])
     return { sid: `mock_${Date.now()}`, mocked: true };
   }
 
-  const smsBody = quickReplies?.length ? `${body}\n\n(${quickReplies.join(" / ")})` : body;
-  const msg = await c.messages.create({ to, from, body: smsBody });
+  const msg = await c.messages.create({
+    to,
+    from,
+    body: formatSmsBody(body, options),
+  });
   return { sid: msg.sid, mocked: false };
 }
 

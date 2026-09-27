@@ -2,13 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+
+type ProductCard = {
+  title: string;
+  price: string;
+  source: string;
+  link: string;
+  imageUrl?: string;
+  label?: string;
+};
 
 type Message = {
   id: string;
   direction: "inbound" | "outbound";
   body: string;
   quick_replies: string[] | null;
+  cards: ProductCard[] | null;
   created_at: string;
 };
 
@@ -19,6 +29,20 @@ const NAV = [
   { href: "/brain", label: "Brain" },
   { href: "/supplier", label: "Supplier" },
 ];
+
+function linkify(text: string): ReactNode[] {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, i) =>
+    part.startsWith("http") ? (
+      <a key={i} href={part} target="_blank" rel="noreferrer" className="bubble-link">
+        {part.replace(/^https?:\/\//, "").slice(0, 42)}
+        {part.length > 50 ? "…" : ""}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    )
+  );
+}
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -46,9 +70,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
   }, [refresh]);
 
+  const lastCardCount = messages[messages.length - 1]?.cards?.length ?? 0;
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length]);
+  }, [messages.length, lastCardCount]);
 
   async function send(text: string) {
     if (!text.trim() || busy) return;
@@ -132,12 +157,47 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <p className="muted empty">No messages yet. Run a check-in or text the agent.</p>
           )}
           {messages.map((m) => (
-            <div
-              key={m.id}
-              className={m.direction === "inbound" ? "bubble inbound" : "bubble outbound"}
-            >
-              <div className="bubble-body">{m.body}</div>
-              <time>{new Date(m.created_at).toLocaleTimeString()}</time>
+            <div key={m.id}>
+              <div
+                className={m.direction === "inbound" ? "bubble inbound" : "bubble outbound"}
+              >
+                <div className="bubble-body">{linkify(m.body)}</div>
+                <time>{new Date(m.created_at).toLocaleTimeString()}</time>
+              </div>
+              {m.direction === "outbound" && m.cards && m.cards.length > 0 && (
+                <div className="product-cards">
+                  {m.cards.map((c, i) => (
+                    <a
+                      key={`${m.id}-${i}`}
+                      className="product-card"
+                      href={c.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => {
+                        // Tapping the card in the mirror also selects that product
+                        if (m.id === last?.id) {
+                          e.preventDefault();
+                          void send(c.label || String(i + 1));
+                        }
+                      }}
+                    >
+                      {c.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={c.imageUrl} alt="" className="product-card-img" />
+                      ) : (
+                        <div className="product-card-img placeholder">{i + 1}</div>
+                      )}
+                      <div className="product-card-body">
+                        <div className="product-card-title">{c.title}</div>
+                        <div className="product-card-meta">
+                          <strong>{c.price}</strong>
+                          <span>{c.source}</span>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {buttons.length > 0 && (

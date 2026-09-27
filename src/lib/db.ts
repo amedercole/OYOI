@@ -5,6 +5,15 @@ import path from "path";
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "oyoi.sqlite");
 
+export type ProductCard = {
+  title: string;
+  price: string;
+  source: string;
+  link: string;
+  imageUrl?: string;
+  label?: string;
+};
+
 export type MessageRow = {
   id: string;
   direction: "inbound" | "outbound";
@@ -12,6 +21,7 @@ export type MessageRow = {
   to_number: string;
   body: string;
   quick_replies: string[] | null;
+  cards: ProductCard[] | null;
   created_at: string;
 };
 
@@ -21,6 +31,7 @@ export type ActionRunRow = {
   status:
     | "awaiting_confirmation"
     | "awaiting_change_details"
+    | "awaiting_product_choice"
     | "running"
     | "done"
     | "failed"
@@ -71,6 +82,9 @@ function getDb(): Database.Database {
   if (!cols.some((c) => c.name === "quick_replies")) {
     db.exec(`ALTER TABLE messages ADD COLUMN quick_replies TEXT`);
   }
+  if (!cols.some((c) => c.name === "cards")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN cards TEXT`);
+  }
 
   g.__oyoiDb = db;
   return db;
@@ -92,16 +106,18 @@ export function logMessage(msg: {
   to_number: string;
   body: string;
   quick_replies?: string[];
+  cards?: ProductCard[];
 }) {
   const created_at = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO messages (id, direction, from_number, to_number, body, quick_replies, created_at)
-       VALUES (@id, @direction, @from_number, @to_number, @body, @quick_replies, @created_at)`
+      `INSERT INTO messages (id, direction, from_number, to_number, body, quick_replies, cards, created_at)
+       VALUES (@id, @direction, @from_number, @to_number, @body, @quick_replies, @cards, @created_at)`
     )
     .run({
       ...msg,
       quick_replies: msg.quick_replies?.length ? JSON.stringify(msg.quick_replies) : null,
+      cards: msg.cards?.length ? JSON.stringify(msg.cards) : null,
       created_at,
     });
 }
@@ -109,10 +125,16 @@ export function logMessage(msg: {
 export function listMessages(limit = 100): MessageRow[] {
   const rows = getDb()
     .prepare(`SELECT * FROM messages ORDER BY created_at ASC LIMIT ?`)
-    .all(limit) as Array<Omit<MessageRow, "quick_replies"> & { quick_replies: string | null }>;
+    .all(limit) as Array<
+    Omit<MessageRow, "quick_replies" | "cards"> & {
+      quick_replies: string | null;
+      cards: string | null;
+    }
+  >;
   return rows.map((r) => ({
     ...r,
     quick_replies: r.quick_replies ? (JSON.parse(r.quick_replies) as string[]) : null,
+    cards: r.cards ? (JSON.parse(r.cards) as ProductCard[]) : null,
   }));
 }
 
@@ -177,7 +199,7 @@ export function listActionRuns(limit = 50): ActionRunRow[] {
     .all(limit) as ActionRunRow[];
 }
 
-const PENDING_STATUSES = `('awaiting_confirmation', 'awaiting_change_details')`;
+const PENDING_STATUSES = `('awaiting_confirmation', 'awaiting_change_details', 'awaiting_product_choice')`;
 
 export function getPendingAction(): ActionRunRow | undefined {
   return getDb()
