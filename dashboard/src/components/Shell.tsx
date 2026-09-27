@@ -104,7 +104,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">OYI</span>
-          <span className="brand-sub">Restaurant ops</span>
+          <span className="brand-sub">Own your inventory</span>
         </div>
         <nav>
           {NAV.map((item) => (
