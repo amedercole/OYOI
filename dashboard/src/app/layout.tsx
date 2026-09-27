@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Fraunces, Source_Sans_3 } from "next/font/google";
-import { headers } from "next/headers";
 import { Shell } from "@/components/Shell";
 import "./globals.css";
 
@@ -19,12 +18,7 @@ export const metadata: Metadata = {
   description: "Text your restaurant. Inventory, suppliers, and memory that compounds.",
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const h = await headers();
-  const path = h.get("x-pathname") || h.get("x-url") || "";
-  // Fallback: supplier is detected client-side via a marker; use middleware path header when present
-  const isSupplier = path.includes("/supplier");
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${display.variable} ${body.variable} h-full`}>
       <body
@@ -36,7 +30,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           } as React.CSSProperties
         }
       >
-        {isSupplier ? children : <Shell>{children}</Shell>}
+        <Shell>{children}</Shell>
       </body>
     </html>
   );
