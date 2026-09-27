@@ -118,6 +118,95 @@ PATH="<dir>/chrome-headless-shell-mac-arm64:$PATH" make serve
 
 </details>
 
+## Restaurant demo
+
+The `restaurant` pack answers WhatsApp (Twilio), tracks projected inventory, texts check-ups, and
+orders through Browser Use. `dashboard/` is a thin Next.js front end over the same ufo process.
+
+### Env (names only)
+
+Root `.env` (gitignored; never commit values):
+
+| Key | Role |
+| --- | --- |
+| `UFO_ANTHROPIC_API_KEY` | Model |
+| `UFO_OPENAI_API_KEY` | Model / embeds |
+| `UFO_TWILIO_ACCOUNT_SID` | SMS / WhatsApp |
+| `UFO_TWILIO_AUTH_TOKEN` | SMS / WhatsApp |
+| `UFO_TWILIO_SMS_NUMBER` | Line address, e.g. `whatsapp:+1…` |
+
+`ufoctl init` mints `UFO_CREDENTIAL_KEY`, `UFO_ARTIFACT_TOKEN_SECRET`, and `UFO_TOKEN_SECRET`.
+Share env files with AirDrop or a 1Password note, not git or chat. Rotate keys that were pasted in
+chat.
+
+Browser Use: store the API key in the workspace credential slot `browser_use_api_key` when the
+agent asks in chat. It is not an env var.
+
+### Pack and serve
+
+```bash
+make install && make build
+cp .env.template .env   # fill the keys above
+uv run ufoctl init --email email@work.com
+```
+
+Edit gitignored `ufo.toml`:
+
+- `[pack] name = "restaurant"`
+- Remove the `[research]` section
+- Set `[connect] public_base_url` to your tunnel URL (Twilio signs against it)
+
+```bash
+uv run ufoctl serve   # :8710
+```
+
+### Tunnel and Twilio
+
+Only one process can own the WhatsApp number. On the demo host:
+
+```bash
+brew install cloudflared
+cloudflared tunnel --url http://localhost:8710
+```
+
+In Twilio, point the WhatsApp sender's inbound webhook at
+`https://<tunnel>/surface/sms/inbound`. A quick tunnel URL changes on every restart.
+
+### Connect the phone and seed
+
+In the terminal client, tell the agent your WhatsApp number so it runs `connect_sms_phone`, then
+prove the claim from WhatsApp. Seed inventory in chat (counts, daily use, order cadence). Give it
+the Browser Use key when it asks.
+
+### Dashboard
+
+```bash
+cd dashboard
+cp .env.local.example .env.local
+# UFO_BASE_URL=http://127.0.0.1:8710
+# UFO_TOKEN=<contents of ~/.ufoctl/token>
+npm install && npm run dev
+```
+
+Overview and Inventory read `GET /ext/restaurant_inventory/inventory`. Chat lists every web chat (New chat
+opens another) beside the WhatsApp thread (read-only); all share one agent, inventory, and memory. Demo → **Run check-ups now** asks the agent to queue
+`inventory_checkup_now`; the minute job texts WhatsApp.
+
+### Friend laptop after the `dashboard/` move
+
+Tracked files move under `dashboard/` on `git pull`. Ignored runtime files stay at the old root:
+
+```bash
+git pull
+mv .env.local data dashboard/ 2>/dev/null
+rm -rf node_modules
+cd dashboard && npm install && npm run dev
+```
+
+For ufo on that laptop: receive `.env` out of band, `make install && make build`, copy `ufo.toml`
+with `[pack] name = "restaurant"` and no `[research]`, then `uv run ufoctl init --email …` and
+`uv run ufoctl serve`. Decide who hosts the WhatsApp number — both servers cannot.
+
 ## How it works
 
 <img src="assets/how-it-works.png" alt="The UFO terminal client sends a message through surfaces and a durable turn queue to the agent loop. The loop can run file and shell work through the terminal client or a sandbox carrier. The server also runs background jobs and uses a database and file storage.">

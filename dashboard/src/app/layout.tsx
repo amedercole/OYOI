@@ -10,7 +10,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "OYI — Restaurant Ops",
-  description: "Text your restaurant. Inventory, suppliers, and memory that compounds.",
+  description: "Restaurant inventory and chat over ufo.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

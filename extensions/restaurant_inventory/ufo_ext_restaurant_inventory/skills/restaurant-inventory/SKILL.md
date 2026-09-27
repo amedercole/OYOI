@@ -1,6 +1,6 @@
 ---
 name: restaurant-inventory
-description: Load when a restaurant owner or cook reports stock, asks what to order, sets up ingredient tracking, or asks for recurring count or reorder reminders by text.
+description: Load when a restaurant owner or cook reports stock, asks what to order, sets up ingredient tracking, or asks for a stock check-up by text.
 ---
 # Restaurant Inventory
 
@@ -11,26 +11,29 @@ description: Load when a restaurant owner or cook reports stock, asks what to or
   recording.
 - A vague count ("about half a case", "running low") is recorded only after one short question
   that gets a number. Never invent or estimate a count.
+- When folding a stock reply into the usage estimate, set `observation`:
+  - `count` with `on_hand` for a real number
+  - `some` when they still have some (no `on_hand`)
+  - `out` when they ran out
 - After recording, answer with what is now LOW and the quantity to order. Nothing low: say so in
   one line.
 
 ## First setup
 
-Ask for the ten ingredients that hurt most when they run out, then per item: unit, par, and
-supplier. Record them as they come; do not wait for the full list.
+Ask for the ingredients that hurt most when they run out, then per item: unit, par, reorder point,
+supplier, estimated daily use, and usual order cadence (`order_every_days`, `last_ordered`).
+Record them as they come; do not wait for the full list.
 
-## Proactive texts
+## Check-ups
 
-Offer these once tracking has items, and create only the ones the owner accepts, as recurring
-`scheduled_task` objects applied from their SMS conversation so each run texts them:
+Projected stock and the next check-up date live on each item. A background job texts the owner on
+WhatsApp/SMS when items are due, or when `inventory_checkup_now` queues one. On a check-up turn:
 
-| Task | Default | Prompt |
-|---|---|---|
-| Closing count | daily, 30 min after close | Ask for today's counts of the tracked items, grouped by where they are stored. |
-| Reorder check | daily, 2 h before the earliest supplier cutoff | Run `inventory_report` with `low_only`; text the order list per supplier, or stay silent when nothing is low. |
-| Weekly review | Monday morning | List items never counted or counted over 3 days ago, and ask whether to adjust any par. |
+- Bundle due items into one message
+- Offer choices Yes / Change / Still have some
+- On reply, record each observation with `inventory_update` and confirm any order before placing it
 
-Convert the owner's local times to UTC cron. Ask their close time and supplier cutoffs if unknown.
+Do not create separate `scheduled_task` objects for inventory check-ups; the inventory job owns that.
 
 ## Ordering on Amazon
 
