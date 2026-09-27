@@ -86,20 +86,26 @@ def segments(text: str) -> tuple[str, ...]:
     return tuple(f"{part} ({index}/{len(parts)})" for index, part in enumerate(parts, start=1))
 
 
-async def send(to: str, body: str) -> str:
-    """Send one reply to `to` from the deploy's line and return the first message's SID."""
+def messages(line: str, to: str, body: str, media: tuple[str, ...]) -> tuple[dict[str, str], ...]:
+    """The Messages API forms for one reply: its text segments, then each picture as a message of
+    its own, because a WhatsApp message carries at most one media item."""
+    texts = tuple({"From": line, "To": to, "Body": part} for part in segments(body))
+    return texts + tuple({"From": line, "To": to, "MediaUrl": url} for url in media)
+
+
+async def send(to: str, body: str, *, media: tuple[str, ...] = ()) -> str:
+    """Send one reply to `to` from the deploy's line and return the first message's SID. `media`
+    holds public picture URLs Twilio fetches and attaches."""
+    forms = messages(line_number(), to, body, media)
+    if not forms:
+        raise ValueError("an sms reply has nothing to send")
     account = _present(ACCOUNT_SID_ENV, deploy_env(ACCOUNT_SID_ENV))
     sids: list[str] = []
     async with httpx.AsyncClient(
         auth=(account, auth_token()), timeout=SEND_TIMEOUT_SECONDS
     ) as client:
-        for part in segments(body):
-            response = await client.post(
-                f"{API_BASE}/Accounts/{account}/Messages.json",
-                data={"From": line_number(), "To": to, "Body": part},
-            )
+        for form in forms:
+            response = await client.post(f"{API_BASE}/Accounts/{account}/Messages.json", data=form)
             response.raise_for_status()
             sids.append(str(response.json()["sid"]))
-    if not sids:
-        raise ValueError("an sms reply has no text to send")
     return sids[0]

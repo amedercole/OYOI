@@ -3,10 +3,13 @@
  * transcript join, and the restaurant_inventory read projection.
  */
 
+export type SharedFile = { name: string; url: string };
+
 export type ChatMessage = {
   id: string;
   direction: "inbound" | "outbound";
   body: string;
+  files: SharedFile[];
 };
 
 export type ChatSummary = {
@@ -94,12 +97,20 @@ function threadMessages(text: string, idPrefix: string): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (const { verb, fields } of parseDirectives(text)) {
     if (verb === "since" || verb === "listen" || verb === "ask" || verb === "poll") break;
+    if (verb === "file" && fields[0]) {
+      const last = messages.at(-1);
+      const file = { name: unescapeField(fields[0]), url: fields[2] ?? "" };
+      if (last?.direction === "outbound") last.files.push(file);
+      else messages.push({ id: `${idPrefix}-${messages.length}`, direction: "outbound", body: "", files: [file] });
+      continue;
+    }
     const said = verb === "you" && fields[0] ? unescapeField(fields[0]) : agentText(verb, fields);
     if (said === null) continue;
     messages.push({
       id: `${idPrefix}-${messages.length}`,
       direction: verb === "you" ? "inbound" : "outbound",
       body: said,
+      files: [],
     });
   }
   return messages;

@@ -3,6 +3,7 @@ from ufo_ext_sms.surface import render_question, twiml
 from ufo_ext_sms.twilio import (
     SEGMENT_MAX_CHARS,
     channel_address,
+    messages,
     segments,
     signature,
     signature_valid,
@@ -49,6 +50,23 @@ def test_long_reply_splits_on_word_boundaries_and_numbers_parts() -> None:
 
 def test_empty_reply_has_no_segments() -> None:
     assert segments("   ") == ()
+
+
+def test_reply_sends_text_then_one_message_per_picture() -> None:
+    line, to = "whatsapp:+19785550100", "whatsapp:+12065550123"
+    assert messages(
+        line, to, "Cart ready. Confirm?", ("https://a/cart.png", "https://a/total.png")
+    ) == (
+        {"From": line, "To": to, "Body": "Cart ready. Confirm?"},
+        {"From": line, "To": to, "MediaUrl": "https://a/cart.png"},
+        {"From": line, "To": to, "MediaUrl": "https://a/total.png"},
+    )
+
+
+def test_picture_only_reply_has_no_text_message() -> None:
+    assert messages("+1", "+2", "  ", ("https://a/cart.png",)) == (
+        {"From": "+1", "To": "+2", "MediaUrl": "https://a/cart.png"},
+    )
 
 
 def test_twiml_escapes_message() -> None:

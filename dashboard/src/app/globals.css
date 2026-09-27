@@ -751,6 +751,21 @@ textarea {
   border-bottom-left-radius: 4px;
 }
 
+.bubble-image {
+  display: block;
+  max-width: min(420px, 100%);
+  margin-top: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.bubble-file {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .bubble-link {
   color: inherit;
   text-decoration: underline;

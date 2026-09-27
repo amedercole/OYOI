@@ -31,6 +31,7 @@ LINKED_REPLY = "This number is linked. Text here to reach your agent."
 FAILED_REPLY = "That request did not finish. Send it again."
 SOURCE_LINE = "Phone message from {sender}"
 TWIML_CONTENT_TYPE = "text/xml"
+IMAGE_MEDIA_PREFIX = "image/"
 
 
 def twiml(message: str | None = None) -> Response:
@@ -96,10 +97,18 @@ async def post(ctx: SurfaceContext, writeback: Writeback) -> str | NothingDelive
     lines = [terminal.text.strip() if terminal.status == "done" else FAILED_REPLY]
     if terminal.question is not None:
         lines.append(render_question(terminal.question))
-    lines.extend(artifact.filename for artifact in writeback.artifacts)
-    return await send(writeback.queue_key, "\n\n".join(line for line in lines if line))
+    media: list[str] = []
+    for artifact in writeback.artifacts:
+        is_image = artifact.media_type.startswith(IMAGE_MEDIA_PREFIX)
+        link = ctx.artifact_preview_link(artifact) if is_image else None
+        if link is None:
+            lines.append(artifact.filename)
+        else:
+            media.append(link)
+    body = "\n\n".join(line for line in lines if line)
+    return await send(writeback.queue_key, body, media=tuple(media))
 
 
 async def attach(ctx: SurfaceContext, writeback: Writeback, reply_ref: str) -> None:
-    """SMS carries no file the agent shares: `post` names each one in the reply, so there is
+    """`post` already sent every shared picture as media and named every other file, so there is
     nothing left to upload. The poller delivers only through a surface declaring both phases."""

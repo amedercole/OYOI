@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { ChatMessage, ChatSummary } from "@/lib/ufo";
 
 const POLL_MS = 4000;
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp)$/i;
 
 type Selection = { kind: "chat"; id: string } | { kind: "new"; channel: string };
 
@@ -193,7 +194,19 @@ export default function ChatPage() {
           )}
           {messages.map((m) => (
             <div key={m.id} className={`bubble-row ${m.direction}`}>
-              <div className="bubble">{linkify(m.body)}</div>
+              {m.body && <div className="bubble">{linkify(m.body)}</div>}
+              {m.files.map((f) =>
+                f.url && IMAGE_FILE.test(f.name) ? (
+                  <a key={f.name} href={f.url} target="_blank" rel="noreferrer">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- signed link on the tunnel host, which changes per restart */}
+                    <img className="bubble-image" src={f.url} alt={f.name} />
+                  </a>
+                ) : (
+                  <a key={f.name} className="bubble-file" href={f.url || undefined} target="_blank" rel="noreferrer">
+                    {f.name}
+                  </a>
+                )
+              )}
             </div>
           ))}
           {shownPending && (
