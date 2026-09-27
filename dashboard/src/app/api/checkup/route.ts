@@ -4,9 +4,12 @@ import { sendChat } from "@/lib/ufo";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const CHECKUP_CHANNEL = "dashboard";
+
 export async function POST() {
   try {
     const result = await sendChat(
+      CHECKUP_CHANNEL,
       "Send the inventory check-up now. Use inventory_checkup_now."
     );
     return NextResponse.json({ ok: true, text: result.reply });

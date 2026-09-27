@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Badge, Card, EmptyState, PageHeader, StatCard } from "@/components/ui";
+import type { ChatSummary } from "@/lib/ufo";
 
 type Item = {
   slug: string;
@@ -14,14 +15,6 @@ type Item = {
   checkup_reason: string | null;
   due: boolean;
   low: boolean;
-};
-
-type Message = {
-  id: string;
-  direction: "inbound" | "outbound";
-  body: string;
-  channel: "sms" | "web";
-  created_at: string;
 };
 
 function amount(n: number) {
@@ -45,7 +38,7 @@ function dayLabel(today: string, iso: string) {
 
 export default function OverviewPage() {
   const [inventory, setInventory] = useState<Item[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
   const [today, setToday] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -59,7 +52,9 @@ export default function OverviewPage() {
       else setError(null);
       setInventory(inv.inventory || []);
       setToday(inv.clock?.today || new Date().toISOString().slice(0, 10));
-      setMessages([...(chat.sms || []), ...(chat.web || [])].slice(-6));
+      setChats(
+        [...((chat.chats as ChatSummary[] | undefined) ?? [])].sort((a, b) => b.lastAt - a.lastAt).slice(0, 5)
+      );
     }
     load();
     const t = setInterval(load, 4000);
@@ -100,7 +95,7 @@ export default function OverviewPage() {
         <StatCard
           label="Open chat"
           value="→"
-          hint="Web and WhatsApp threads"
+          hint="Web chats and your WhatsApp thread"
         />
       </div>
 
@@ -146,39 +141,19 @@ export default function OverviewPage() {
         </Card>
       </div>
 
-      <Card title="Latest conversation">
-        {messages.length === 0 ? (
-          <EmptyState>No messages yet.</EmptyState>
+      <Card title="Recent chats">
+        {chats.length === 0 ? (
+          <EmptyState>No chats yet.</EmptyState>
         ) : (
-          messages.map((m) => (
-            <div className="list-row" key={m.id}>
-              <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "0.4rem",
-                    alignItems: "center",
-                    marginBottom: "0.2rem",
-                  }}
-                >
-                  <strong style={{ fontSize: "0.82rem" }}>
-                    {m.direction === "inbound" ? "Tony" : "OYI"}
-                  </strong>
-                  <span className={`badge channel channel-${m.channel}`}>
-                    {m.channel === "sms" ? "WhatsApp" : "Web"}
-                  </span>
-                </div>
-                <div
-                  className="muted small"
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {m.body}
-                </div>
+          chats.map((c) => (
+            <div className="list-row" key={c.id}>
+              <div
+                className="muted small"
+                style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {c.kind === "text" ? "WhatsApp" : c.title}
               </div>
+              <span className={`badge channel channel-${c.kind}`}>{c.kind === "text" ? "Text" : "Web"}</span>
             </div>
           ))
         )}
