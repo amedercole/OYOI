@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Badge, Card, EmptyState, PageHeader, StatCard } from "@/components/ui";
+import type { ChatSummary } from "@/lib/ufo";
 
 type Item = {
   slug: string;
@@ -16,22 +17,6 @@ type Item = {
   low: boolean;
 };
 
-type Action = {
-  id: string;
-  kind: string;
-  status: string;
-  summary: string;
-  created_at: string;
-};
-
-type Message = {
-  id: string;
-  direction: "inbound" | "outbound";
-  body: string;
-  channel: "sms" | "web";
-  created_at: string;
-};
-
 function amount(n: number) {
   return n >= 10 ? String(Math.round(n)) : String(Math.round(n * 2) / 2);
 }
@@ -43,29 +28,36 @@ function dayLabel(today: string, iso: string) {
   if (d === 1) return "tomorrow";
   if (d < 0) return `${-d}d ago`;
   const date = new Date(`${iso}T12:00:00Z`);
-  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 export default function OverviewPage() {
   const [inventory, setInventory] = useState<Item[]>([]);
-  const [actions, setActions] = useState<Action[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
   const [today, setToday] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
-      const [inv, act, chat] = await Promise.all([
+      const [inv, chat] = await Promise.all([
         fetch("/api/inventory").then((r) => r.json()),
-        fetch("/api/actions").then((r) => r.json()),
         fetch("/api/chat").then((r) => r.json()),
       ]);
+      if (inv.error || chat.error) setError(inv.error || chat.error);
+      else setError(null);
       setInventory(inv.inventory || []);
-      setToday(inv.clock?.today || "");
-      setActions(act.actions || []);
-      setMessages(chat.messages || []);
+      setToday(inv.clock?.today || new Date().toISOString().slice(0, 10));
+      setChats(
+        [...((chat.chats as ChatSummary[] | undefined) ?? [])].sort((a, b) => b.lastAt - a.lastAt).slice(0, 5)
+      );
     }
     load();
-    const t = setInterval(load, 3000);
+    const t = setInterval(load, 4000);
     return () => clearInterval(t);
   }, []);
 
@@ -74,26 +66,15 @@ export default function OverviewPage() {
     .filter((i) => i.next_checkup)
     .sort((a, b) => a.next_checkup.localeCompare(b.next_checkup))
     .slice(0, 5);
-
-  const waiting = actions.filter((a) =>
-    ["awaiting_confirmation", "awaiting_change_details", "awaiting_product_choice"].includes(a.status)
-  );
-
-  const weekOrders = actions.filter((a) => {
-    if (a.status !== "done") return false;
-    if (!/order/i.test(a.summary) && a.kind !== "bundle" && a.kind !== "checkup") return false;
-    return true;
-  }).slice(0, 20);
-
   const next = upcoming[0];
-  const lastMsgs = messages.slice(-4);
 
   return (
     <div>
       <PageHeader
         title="Overview"
-        subtitle="What's due, what's waiting on Tony, and the latest from the shared SMS / web conversation."
+        subtitle="Projected stock and check-ups from ufo. Chat on the web or WhatsApp."
       />
+      {error && <div className="toast">{error}</div>}
 
       <div className="stat-grid">
         <StatCard
@@ -104,17 +85,17 @@ export default function OverviewPage() {
         <StatCard
           label="Next check-up"
           value={next && today ? dayLabel(today, next.next_checkup) : "—"}
-          hint={next ? `${next.name} · ${next.checkup_reason?.replaceAll("_", " ") || ""}` : "Nothing scheduled"}
+          hint={
+            next
+              ? `${next.name} · ${next.checkup_reason?.replaceAll("_", " ") || ""}`
+              : "Nothing scheduled"
+          }
         />
+        <StatCard label="Tracked items" value={inventory.length} hint="From restaurant_inventory" />
         <StatCard
-          label="Orders this week"
-          value={weekOrders.length}
-          hint="Completed reorder actions"
-        />
-        <StatCard
-          label="Waiting on Tony"
-          value={waiting.length}
-          hint={waiting[0]?.summary || "No open questions"}
+          label="Open chat"
+          value="→"
+          hint="Web chats and your WhatsApp thread"
         />
       </div>
 
@@ -128,10 +109,12 @@ export default function OverviewPage() {
                 <div>
                   <strong>{i.name}</strong>
                   <div className="muted small">
-                    ~{amount(i.estimate)} {i.unit} · ~{i.daily_use}/{i.unit === "lbs" ? "day" : "day"}
+                    ~{amount(i.estimate)} {i.unit} · ~{i.daily_use}/day
                   </div>
                 </div>
-                <Badge tone={i.due ? "due" : "low"}>{i.due ? "Check-up due" : "Probably low"}</Badge>
+                <Badge tone={i.due ? "due" : "low"}>
+                  {i.due ? "Check-up due" : "Probably low"}
+                </Badge>
               </div>
             ))
           )}
@@ -145,64 +128,41 @@ export default function OverviewPage() {
               <div className="list-row" key={i.slug}>
                 <div>
                   <strong>{i.name}</strong>
-                  <div className="muted small">{i.checkup_reason?.replaceAll("_", " ")}</div>
+                  <div className="muted small">
+                    {i.checkup_reason?.replaceAll("_", " ")}
+                  </div>
                 </div>
-                <span className="muted small">{today ? dayLabel(today, i.next_checkup) : i.next_checkup}</span>
+                <span className="muted small">
+                  {today ? dayLabel(today, i.next_checkup) : i.next_checkup}
+                </span>
               </div>
             ))
           )}
         </Card>
       </div>
 
-      <div className="grid-2">
-        <Card title="Recent activity">
-          {actions.length === 0 ? (
-            <EmptyState>No actions yet. Fast-forward a day from Demo to start.</EmptyState>
-          ) : (
-            actions.slice(0, 6).map((a) => (
-              <div className="list-row" key={a.id}>
-                <div>
-                  <strong>{a.summary}</strong>
-                  <div className="muted small">{new Date(a.created_at).toLocaleString()}</div>
-                </div>
-                <Badge tone={a.status}>{a.status.replaceAll("_", " ")}</Badge>
+      <Card title="Recent chats">
+        {chats.length === 0 ? (
+          <EmptyState>No chats yet.</EmptyState>
+        ) : (
+          chats.map((c) => (
+            <div className="list-row" key={c.id}>
+              <div
+                className="muted small"
+                style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {c.kind === "text" ? "WhatsApp" : c.title}
               </div>
-            ))
-          )}
-          <div style={{ marginTop: "0.75rem" }}>
-            <Link href="/activity" className="muted small" style={{ color: "var(--accent)", fontWeight: 600 }}>
-              View all activity →
-            </Link>
-          </div>
-        </Card>
-
-        <Card title="Latest conversation">
-          {lastMsgs.length === 0 ? (
-            <EmptyState>No messages yet.</EmptyState>
-          ) : (
-            lastMsgs.map((m) => (
-              <div className="list-row" key={m.id}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", marginBottom: "0.2rem" }}>
-                    <strong style={{ fontSize: "0.82rem" }}>{m.direction === "inbound" ? "Tony" : "OYI"}</strong>
-                    <span className={`badge channel channel-${m.channel}`}>
-                      {m.channel === "sms" ? "Text" : "Web"}
-                    </span>
-                  </div>
-                  <div className="muted small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {m.body}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-          <div style={{ marginTop: "0.75rem" }}>
-            <Link href="/chat" className="btn btn-accent" style={{ display: "inline-block" }}>
-              Open chat
-            </Link>
-          </div>
-        </Card>
-      </div>
+              <span className={`badge channel channel-${c.kind}`}>{c.kind === "text" ? "Text" : "Web"}</span>
+            </div>
+          ))
+        )}
+        <div style={{ marginTop: "0.75rem" }}>
+          <Link href="/chat" className="btn btn-accent" style={{ display: "inline-block" }}>
+            Open chat
+          </Link>
+        </div>
+      </Card>
     </div>
   );
 }

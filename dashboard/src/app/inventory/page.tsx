@@ -19,14 +19,6 @@ type Item = {
   low: boolean;
 };
 
-type Appliance = {
-  slug: string;
-  name: string;
-  status: string;
-  last_service: string;
-  next_service: string;
-};
-
 const DAY_MS = 86_400_000;
 
 function dayDiff(from: string, to: string) {
@@ -58,19 +50,20 @@ const REASON: Record<string, string> = {
 
 export default function InventoryPage() {
   const [inventory, setInventory] = useState<Item[]>([]);
-  const [appliances, setAppliances] = useState<Appliance[]>([]);
   const [today, setToday] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       const res = await fetch("/api/inventory");
       const data = await res.json();
+      if (data.error) setError(data.error);
+      else setError(null);
       setInventory(data.inventory || []);
-      setAppliances(data.appliances || []);
-      setToday(data.clock?.today || "");
+      setToday(data.clock?.today || new Date().toISOString().slice(0, 10));
     }
     load();
-    const t = setInterval(load, 3000);
+    const t = setInterval(load, 4000);
     return () => clearInterval(t);
   }, []);
 
@@ -78,8 +71,9 @@ export default function InventoryPage() {
     <div>
       <PageHeader
         title="Inventory"
-        subtitle="Estimates from Tony's last count and typical usage. Check-ups fire when an item is projected low or on its usual order day."
+        subtitle="Estimates from the last count and typical usage in ufo. Check-ups fire when an item is projected low or on its usual order day."
       />
+      {error && <div className="toast">{error}</div>}
 
       <div className="table-wrap">
         <table className="table">
@@ -95,7 +89,10 @@ export default function InventoryPage() {
           </thead>
           <tbody>
             {inventory.map((item) => {
-              const pct = item.last_count > 0 ? Math.min(100, (item.estimate / item.last_count) * 100) : 0;
+              const pct =
+                item.last_count > 0
+                  ? Math.min(100, (item.estimate / item.last_count) * 100)
+                  : 0;
               return (
                 <tr key={item.slug} className={item.low || item.due ? "row-low" : undefined}>
                   <td>
@@ -106,11 +103,15 @@ export default function InventoryPage() {
                       ~{amount(item.estimate)} {item.unit}
                     </div>
                     <div className="gauge" aria-hidden>
-                      <span style={{ width: `${pct}%` }} className={item.low ? "gauge-low" : undefined} />
+                      <span
+                        style={{ width: `${pct}%` }}
+                        className={item.low ? "gauge-low" : undefined}
+                      />
                     </div>
                     {today && (
                       <div className="muted small">
-                        counted {amount(item.last_count)} {item.unit} {relDay(today, item.last_counted)}
+                        counted {amount(item.last_count)} {item.unit}{" "}
+                        {relDay(today, item.last_counted)}
                       </div>
                     )}
                   </td>
@@ -147,24 +148,6 @@ export default function InventoryPage() {
             })}
           </tbody>
         </table>
-      </div>
-
-      <h2 style={{ fontSize: "1.15rem", fontWeight: 650, margin: "2rem 0 0.85rem" }}>Appliances</h2>
-      <div className="grid-cards">
-        {appliances.map((a) => (
-          <div className="card" key={a.slug}>
-            <h3 style={{ margin: "0 0 0.5rem", fontSize: "1rem" }}>{a.name}</h3>
-            <p className="muted small" style={{ margin: "0.2rem 0" }}>
-              Status: {a.status}
-            </p>
-            <p className="muted small" style={{ margin: "0.2rem 0" }}>
-              Last service: {a.last_service || "—"}
-            </p>
-            <p className="muted small" style={{ margin: "0.2rem 0" }}>
-              Next service: {a.next_service || "—"}
-            </p>
-          </div>
-        ))}
       </div>
     </div>
   );

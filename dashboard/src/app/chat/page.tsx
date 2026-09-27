@@ -1,25 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { ChatMessage, ChatSummary } from "@/lib/ufo";
 
-type ProductCard = {
-  title: string;
-  price: string;
-  source: string;
-  link: string;
-  imageUrl?: string;
-  label?: string;
-};
+const POLL_MS = 4000;
 
-type Message = {
-  id: string;
-  direction: "inbound" | "outbound";
-  body: string;
-  channel: "sms" | "web";
-  quick_replies: string[] | null;
-  cards: ProductCard[] | null;
-  created_at: string;
-};
+type Selection = { kind: "chat"; id: string } | { kind: "new"; channel: string };
+
+function newChat(): Selection {
+  return { kind: "new", channel: `web-${crypto.randomUUID()}` };
+}
 
 function linkify(text: string): ReactNode[] {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
@@ -35,155 +25,233 @@ function linkify(text: string): ReactNode[] {
   );
 }
 
-function dayKey(iso: string) {
-  return iso.slice(0, 10);
+function ago(now: number, seconds: number): string {
+  const minutes = Math.floor((now / 1000 - seconds) / 60);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return new Date(seconds * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function dayLabel(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+function KindBadge({ kind }: { kind: ChatSummary["kind"] }) {
+  return <span className={`badge channel channel-${kind}`}>{kind === "text" ? "Text" : "Web"}</span>;
+}
+
+function ChatRow({
+  title,
+  kind,
+  meta,
+  active,
+  onClick,
+}: {
+  title: string;
+  kind: ChatSummary["kind"];
+  meta: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button className={active ? "chat-row active" : "chat-row"} onClick={onClick}>
+      <span className="chat-row-title">{title}</span>
+      <span className="chat-row-meta">
+        <KindBadge kind={kind} />
+        <span>{meta}</span>
+      </span>
+    </button>
+  );
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [twilioPhone, setTwilioPhone] = useState<string | null>(null);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [pending, setPending] = useState<{ channel: string; text: string } | null>(null);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(0);
   const threadRef = useRef<HTMLDivElement>(null);
+  const shownId = useRef<string | null>(null);
+  const selectionRef = useRef<Selection | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/chat");
-      const data = await res.json();
-      setMessages(data.messages || []);
-      setTwilioPhone(data.twilioPhone || null);
-    } catch {
-      /* ignore */
-    }
+  const loadChats = useCallback(async (): Promise<ChatSummary[]> => {
+    const data = (await (await fetch("/api/chat")).json()) as { chats?: ChatSummary[]; error?: string };
+    setError(data.error ?? null);
+    setNow(Date.now());
+    const list = data.chats ?? [];
+    setChats(list);
+    return list;
+  }, []);
+
+  const loadMessages = useCallback(async (id: string) => {
+    const res = await fetch(`/api/chat?id=${encodeURIComponent(id)}`);
+    const data = (await res.json()) as { messages?: ChatMessage[]; error?: string };
+    if (data.error) return setError(data.error);
+    if (shownId.current === id) setMessages(data.messages ?? []);
   }, []);
 
   useEffect(() => {
-    const first = setTimeout(refresh, 0);
-    const t = setInterval(refresh, 2000);
+    async function tick() {
+      try {
+        const list = await loadChats();
+        const latest = [...list].sort((a, b) => b.lastAt - a.lastAt)[0];
+        setSelection((s) => s ?? (latest ? { kind: "chat", id: latest.id } : newChat()));
+      } catch {
+        setError("ufo unavailable");
+      }
+    }
+    const first = setTimeout(tick, 0);
+    const t = setInterval(tick, POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [refresh]);
+  }, [loadChats]);
 
-  const lastCardCount = messages[messages.length - 1]?.cards?.length ?? 0;
+  const selected = selection?.kind === "chat" ? chats.find((c) => c.id === selection.id) : undefined;
+  const selectedId = selection?.kind === "chat" ? selection.id : null;
+  const selectedBusy = selected?.busy ?? false;
+  const selectedLastAt = selected?.lastAt ?? 0;
+  const channel = selection?.kind === "new" ? selection.channel : (selected?.channel ?? null);
+  const kind = selected?.kind ?? "web";
+  const shownPending = pending && pending.channel === channel ? pending : null;
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+
+  useEffect(() => {
+    shownId.current = selectedId;
+    if (!selectedId || selectedBusy) return;
+    const t = setTimeout(() => {
+      loadMessages(selectedId).catch(() => setError("ufo unavailable"));
+    }, 0);
+    return () => clearTimeout(t);
+  }, [selectedId, selectedBusy, selectedLastAt, loadMessages]);
+
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length, lastCardCount]);
+  }, [messages.length, shownPending, selectedId]);
 
-  async function send(text: string) {
-    if (!text.trim() || busy) return;
-    setBusy(true);
+  function select(next: Selection) {
+    shownId.current = next.kind === "chat" ? next.id : null;
+    setMessages([]);
+    setSelection(next);
+  }
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || !channel || pending) return;
+    setPending({ channel, text });
+    setDraft("");
     try {
-      await fetch("/api/chat", {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: text }),
+        body: JSON.stringify({ channel, body: text }),
       });
-      setDraft("");
-      await refresh();
+      const data = (await res.json()) as { error?: string };
+      if (data.error) setError(data.error);
+      const chat = (await loadChats()).find((c) => c.channel === channel);
+      if (chat) {
+        const current = selectionRef.current;
+        if (current?.kind === "new" && current.channel === channel) {
+          shownId.current = chat.id;
+          setSelection({ kind: "chat", id: chat.id });
+        }
+        if (shownId.current === chat.id) await loadMessages(chat.id);
+      }
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
-  const last = messages[messages.length - 1];
-  const buttons = last?.direction === "outbound" ? last.quick_replies ?? [] : [];
-
-  const dayGroups = messages.map((m, i) => {
-    const day = dayKey(m.created_at);
-    const prev = i > 0 ? dayKey(messages[i - 1].created_at) : null;
-    return { m, showDay: day !== prev };
-  });
+  const textChats = chats.filter((c) => c.kind === "text");
+  const webChats = chats.filter((c) => c.kind === "web").sort((a, b) => b.lastAt - a.lastAt);
+  const title =
+    selection?.kind === "new" ? "New chat" : kind === "text" ? "WhatsApp" : (selected?.title ?? "");
 
   return (
-    <>
-      <div className="chat-header">
-        <h2>Chat with OYI</h2>
-        <p>
-          Same conversation as texting{" "}
-          {twilioPhone ? <strong>{twilioPhone}</strong> : "your OYI number"}. Replies go wherever you last wrote
-          from.
-        </p>
-      </div>
-
-      <div className="chat-thread" ref={threadRef}>
-        {messages.length === 0 && (
-          <div className="empty-state">No messages yet. Fast-forward a day from Demo, or say hello.</div>
-        )}
-        {dayGroups.map(({ m, showDay }) => (
-            <div key={m.id}>
-              {showDay && <div className="chat-day">{dayLabel(m.created_at)}</div>}
-              <div className={`bubble-row ${m.direction}`}>
-                <div className="bubble">{linkify(m.body)}</div>
-                <div className="bubble-meta">
-                  <span className={`badge channel channel-${m.channel}`}>
-                    {m.channel === "sms" ? "Text" : "Web"}
-                  </span>
-                  <time>{new Date(m.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
-                </div>
-                {m.direction === "outbound" && m.cards && m.cards.length > 0 && (
-                  <div className="product-cards">
-                    {m.cards.map((c, i) => (
-                      <button
-                        key={`${m.id}-${i}`}
-                        type="button"
-                        className="product-card"
-                        onClick={() => {
-                          if (m.id === last?.id) void send(c.label || String(i + 1));
-                        }}
-                        style={{ textAlign: "left", width: "100%" }}
-                      >
-                        {c.imageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={c.imageUrl} alt="" className="product-card-img" />
-                        ) : (
-                          <div className="product-card-img placeholder">{i + 1}</div>
-                        )}
-                        <div>
-                          <div className="product-card-title">{c.title}</div>
-                          <div className="product-card-meta">
-                            <strong>{c.price}</strong>
-                            <span>{c.source}</span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+    <div className="chat-layout">
+      {error && <div className="toast">{error}</div>}
+      <section className="chat-pane">
+        <div className="chat-header">
+          <div className="chat-header-title">
+            <h2>{title}</h2>
+            <KindBadge kind={kind} />
+          </div>
+          <p>
+            {kind === "text"
+              ? "Your phone's thread. Check-ups arrive here."
+              : "Shares inventory and memory with every chat."}
+          </p>
+        </div>
+        <div className="chat-thread" ref={threadRef}>
+          {messages.length === 0 && !shownPending && (
+            <div className="empty-state">
+              {selection?.kind === "new" ? "Ask about stock, orders, or suppliers." : "No messages yet."}
             </div>
-        ))}
-
-        {buttons.length > 0 && (
-          <div className="quick-replies" style={{ alignSelf: "flex-start" }}>
-            {buttons.map((label) => (
-              <button key={label} className="quick-reply" onClick={() => send(label)} disabled={busy}>
-                {label}
-              </button>
-            ))}
+          )}
+          {messages.map((m) => (
+            <div key={m.id} className={`bubble-row ${m.direction}`}>
+              <div className="bubble">{linkify(m.body)}</div>
+            </div>
+          ))}
+          {shownPending && (
+            <div className="bubble-row inbound">
+              <div className="bubble">{shownPending.text}</div>
+            </div>
+          )}
+          {(shownPending || selectedBusy) && <div className="typing">OYI is replying…</div>}
+        </div>
+        {kind === "text" ? (
+          <div className="chat-composer chat-composer-readonly">Reply on WhatsApp to continue this thread.</div>
+        ) : (
+          <div className="chat-composer">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void send()}
+              placeholder="Message OYI…"
+              disabled={pending !== null}
+            />
+            <button className="btn btn-accent" onClick={() => void send()} disabled={pending !== null || !draft.trim()}>
+              Send
+            </button>
           </div>
         )}
-        {busy && <div className="typing">OYI is typing…</div>}
-      </div>
+      </section>
 
-      <div className="chat-composer">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send(draft)}
-          placeholder="Message OYI…"
-          disabled={busy}
-        />
-        <button className="btn btn-accent" onClick={() => send(draft)} disabled={busy || !draft.trim()}>
-          Send
+      <aside className="chat-list">
+        <button className="btn btn-accent chat-new" onClick={() => select(newChat())}>
+          New chat
         </button>
-      </div>
-    </>
+        <div className="chat-list-section">Text</div>
+        {textChats.length === 0 && <div className="chat-list-empty">No phone linked. Ask in a web chat to link one.</div>}
+        {textChats.map((c) => (
+          <ChatRow
+            key={c.id}
+            title="WhatsApp"
+            kind="text"
+            meta={ago(now, c.lastAt)}
+            active={selectedId === c.id}
+            onClick={() => select({ kind: "chat", id: c.id })}
+          />
+        ))}
+        <div className="chat-list-section">Web</div>
+        {selection?.kind === "new" && (
+          <ChatRow title="New chat" kind="web" meta="now" active onClick={() => undefined} />
+        )}
+        {webChats.map((c) => (
+          <ChatRow
+            key={c.id}
+            title={c.title}
+            kind="web"
+            meta={ago(now, c.lastAt)}
+            active={selectedId === c.id}
+            onClick={() => select({ kind: "chat", id: c.id })}
+          />
+        ))}
+      </aside>
+    </div>
   );
 }
