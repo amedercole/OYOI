@@ -74,6 +74,12 @@ function getDb(): Database.Database {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS checkups (
+      slug TEXT NOT NULL,
+      day TEXT NOT NULL,
+      action_id TEXT,
+      PRIMARY KEY (slug, day)
+    );
     CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_actions_status ON action_runs(status);
   `);
@@ -197,6 +203,16 @@ export function listActionRuns(limit = 50): ActionRunRow[] {
   return getDb()
     .prepare(`SELECT * FROM action_runs ORDER BY created_at DESC LIMIT ?`)
     .all(limit) as ActionRunRow[];
+}
+
+export function wasCheckedOn(slug: string, day: string): boolean {
+  return !!getDb().prepare(`SELECT 1 FROM checkups WHERE slug = ? AND day = ?`).get(slug, day);
+}
+
+export function recordCheckup(slug: string, day: string, actionId: string | null) {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO checkups (slug, day, action_id) VALUES (?, ?, ?)`)
+    .run(slug, day, actionId);
 }
 
 const PENDING_STATUSES = `('awaiting_confirmation', 'awaiting_change_details', 'awaiting_product_choice')`;

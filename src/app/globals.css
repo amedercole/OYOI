@@ -429,6 +429,56 @@ a {
   background: rgba(253, 232, 200, 0.45);
 }
 
+.small {
+  font-size: 0.78rem;
+}
+
+.gauge {
+  width: 90px;
+  height: 5px;
+  margin: 0.3rem 0 0.2rem;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.gauge span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.gauge span.gauge-low {
+  background: var(--warn);
+}
+
+.demo-clock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #2a3b33;
+  color: #cfe0d6;
+  font-size: 0.8rem;
+}
+
+.demo-clock .btn {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+.demo-notice {
+  margin: 0.5rem 1rem 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  background: #24362d;
+  color: #cfe0d6;
+  font-size: 0.78rem;
+}
+
 .banner {
   margin: 0.75rem 1rem 0;
   padding: 0.65rem 0.75rem;

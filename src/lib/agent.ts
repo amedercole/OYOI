@@ -5,19 +5,24 @@ import {
   appendActionMemory,
   appendTimeline,
   editPage,
+  formatAmount,
   getBehaviorLog,
   getPage,
   listInventory,
   listPages,
   listWorkflows,
   putPage,
+  type InventoryItem,
   type Workflow,
 } from "./brain";
+import { addDays, daysBetween, describeDay, todayISO } from "./clock";
 import {
   cancelPendingActions,
   createActionRun,
   getPendingAction,
+  recordCheckup,
   updateActionRun,
+  wasCheckedOn,
   type ActionRunRow,
   type ProductCard,
 } from "./db";
@@ -37,6 +42,8 @@ export type AgentResult = { replies: Reply[]; actions: string[] };
 const CONFIRM_BUTTONS = ["Yes", "Change"];
 const ROUTINE_BUTTONS = ["Make it the default", "Just this once"];
 const SAME_BUTTONS = ["Same as last time", "Show me options"];
+const CHECKUP_BUTTONS = ["Yes", "Change", "Still have some"];
+const RECHECK_AFTER_DAYS = 2;
 const BEHAVIOR_SLUG = "preferences/owner-behavior";
 const PEPSI_WORKFLOW = "workflows/pepsi-delivery-change";
 
@@ -91,6 +98,8 @@ type Payload = {
   steps?: Step[];
   said?: string;
   deviation?: Deviation;
+  /** Inventory slugs this check-up asked about, so "still have some" knows what it refers to. */
+  checkup?: string[];
 } & Partial<ShopPayload>;
 
 type Intent = { intent: "yes" | "no" | "change" | "other"; details?: string };
@@ -122,10 +131,28 @@ function describeStep(s: Step): string {
   return `remember that ${s.fact}`;
 }
 
-function describeSteps(steps: Step[]) {
-  const parts = steps.map(describeStep);
+function joinList(parts: string[]) {
   if (parts.length <= 1) return parts[0] ?? "";
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+function describeSteps(steps: Step[]) {
+  const parts: string[] = [];
+  const orders = steps.filter((s) => s.type === "order");
+  const bySupplier = new Map<string, Step[]>();
+  for (const s of orders) bySupplier.set(s.supplier ?? "", [...(bySupplier.get(s.supplier ?? "") ?? []), s]);
+  for (const [supplier, group] of bySupplier) {
+    if (group.length === 1) {
+      parts.push(describeStep(group[0]));
+      continue;
+    }
+    const allUsual = group.every((s) => s.quantity === s.usual_qty);
+    const cost = Math.round(group.reduce((sum, s) => sum + (s.unit_price ?? 0) * (s.quantity ?? 0), 0));
+    const items = joinList(group.map((s) => `${s.quantity} ${s.unit} of ${s.product?.toLowerCase()}`));
+    parts.push(`order ${allUsual ? "the usual " : ""}${items} from ${supplierName(supplier)}${cost ? ` (~$${cost} total)` : ""}`);
+  }
+  parts.push(...steps.filter((s) => s.type !== "order").map(describeStep));
+  return joinList(parts);
 }
 
 function capitalize(s: string) {
@@ -289,20 +316,32 @@ async function heuristicPlan(text: string): Promise<Step[]> {
   return steps;
 }
 
+function orderAliases(s: Step): string[] {
+  return [(s.product ?? "").toLowerCase(), ...(ITEM_ALIASES[s.inventory ?? ""] ?? [])].filter(Boolean);
+}
+
 async function heuristicRevise(steps: Step[], text: string): Promise<Step[]> {
   let next = steps.map((s) => ({ ...s }));
+  const t = text.toLowerCase();
+  const orders = next.filter((s) => s.type === "order");
+  const named = orders.filter((s) => orderAliases(s).some((a) => t.includes(a)));
+  const dropped = orders.filter((s) =>
+    orderAliases(s).some((a) => new RegExp(`${NEGATE}\\s+(?:the\\s+)?(?:\\w+\\s+){0,2}?${a}`, "i").test(t))
+  );
 
-  if (negatesCheese(text)) {
+  if (dropped.length) {
+    next = next.filter((s) => !dropped.includes(s));
+  } else if (negatesCheese(text) && orders.length <= 1) {
     next = next.filter((s) => s.type !== "order");
-  } else {
-    const qty = parseQuantity(text);
-    if (qty) {
-      const order = next.find((s) => s.type === "order");
-      if (order) order.quantity = qty;
-      else {
-        const wf = await cheeseWorkflow();
-        if (wf) next.push(orderStepFromWorkflow(wf, qty));
-      }
+  }
+  const qty = parseQuantity(text);
+  if (qty) {
+    const kept = orders.filter((s) => next.includes(s));
+    const order = named.find((s) => kept.includes(s)) ?? (kept.length === 1 ? kept[0] : undefined);
+    if (order) order.quantity = qty;
+    else if (orders.length === 0) {
+      const wf = await cheeseWorkflow();
+      if (wf) next.push(orderStepFromWorkflow(wf, qty));
     }
   }
 
@@ -351,6 +390,7 @@ function heuristicIntent(text: string, kind: string): Intent | null {
 
   const changeSignal =
     /\b(change|instead|actually|different|make it|switch|also|but|only|except|rather|swap|more|less|fewer|bump|add|drop|remove)\b/.test(t) ||
+    /\b(?:skip|hold off on|without)\s+(?:the\s+)?(?!it\b)\w+/.test(t) ||
     negatesPepsi(t) ||
     negatesCheese(t) ||
     parseQuantity(t) !== null ||
@@ -471,8 +511,11 @@ async function buildContext() {
     listPages("purchases/"),
   ]);
   return [
-    "INVENTORY:",
-    ...inventory.map((i) => `- ${i.name}: ${i.qty} ${i.unit} (par ${i.par})${i.low ? " LOW" : ""}`),
+    `INVENTORY (estimated, no scale or POS; today is ${todayISO()}):`,
+    ...inventory.map(
+      (i) =>
+        `- ${i.name}: ~${formatAmount(i.estimate)} ${i.unit} (low point ${i.par}, uses ~${i.daily_use}/day, next check-up ${i.next_checkup})${i.low ? " PROBABLY LOW" : ""}`
+    ),
     "WORKFLOWS:",
     ...workflows.map(
       (w) =>
@@ -636,7 +679,7 @@ async function recordPurchase(
   const slug = `purchases/${slugifyItem(query)}`;
   const existing = await getPage(slug);
   const times = Number(existing?.frontmatter.times_ordered ?? 0) + 1;
-  const date = new Date().toISOString().slice(0, 10);
+  const date = todayISO();
   const oldTimeline =
     existing?.content
       .split("## Timeline\n")[1]
@@ -1059,11 +1102,12 @@ async function executeSteps(action: ActionRunRow, payload: Payload): Promise<str
       detail.order = order;
       if (order.liveUrl) updateActionRun(action.id, { browser_live_url: order.liveUrl });
       if (order.ok && s.inventory) {
-        const inv = await getPage(s.inventory);
-        const qty = Number(inv?.frontmatter.qty ?? 0) + (s.quantity ?? 0);
+        const item = (await listInventory()).find((i) => i.slug === s.inventory);
+        const onHand = Math.round(((item?.estimate ?? 0) + (s.quantity ?? 0)) * 10) / 10;
+        const today = todayISO();
         await editPage(s.inventory, {
-          patch: { qty },
-          timeline: `Ordered ${s.quantity} ${s.unit} from ${supplierName(s.supplier)} (confirmation ${order.confirmationNumber})`,
+          patch: { last_count: onHand, last_counted: today, last_ordered: today, snooze_until: "" },
+          timeline: `Ordered ${s.quantity} ${s.unit} from ${supplierName(s.supplier)} (confirmation ${order.confirmationNumber}); ~${formatAmount(onHand)} ${s.unit} on hand once it lands`,
         });
       }
       results.push(
@@ -1100,25 +1144,35 @@ async function executeSteps(action: ActionRunRow, payload: Payload): Promise<str
   return results;
 }
 
-function propose(steps: Step[], said: string, phrase: (plan: string) => string): AgentResult {
+function propose(
+  steps: Step[],
+  said: string,
+  phrase: (plan: string) => string,
+  opts: { kind?: string; buttons?: string[]; extra?: Partial<Payload> } = {}
+): AgentResult {
   cancelPendingActions();
   const id = randomUUID();
   createActionRun({
     id,
-    kind: "bundle",
+    kind: opts.kind ?? "bundle",
     status: "awaiting_confirmation",
     summary: capitalize(describeSteps(steps)),
-    payload: { steps, said } satisfies Payload,
+    payload: { ...opts.extra, steps, said } satisfies Payload,
   });
   return {
-    replies: [{ body: phrase(describeSteps(steps)), quickReplies: CONFIRM_BUTTONS }],
+    replies: [{ body: phrase(describeSteps(steps)), quickReplies: opts.buttons ?? CONFIRM_BUTTONS }],
     actions: [id],
   };
 }
 
 async function approve(pending: ActionRunRow, payload: Payload): Promise<AgentResult> {
   const results = await executeSteps(pending, payload);
-  const replies: Reply[] = [{ body: `Done.\n${results.map((r) => `- ${r}`).join("\n")}` }];
+  const ordered = new Set((payload.steps || []).map((s) => s.inventory).filter(Boolean));
+  const nextChecks = (await listInventory())
+    .filter((i) => ordered.has(i.slug) && i.next_checkup)
+    .map((i) => `${i.name.toLowerCase()} ${describeDay(i.next_checkup)}`);
+  const followUp = nextChecks.length ? `\nI'll check back on ${joinList(nextChecks)}.` : "";
+  const replies: Reply[] = [{ body: `Done.\n${results.map((r) => `- ${r}`).join("\n")}${followUp}` }];
   const actions = [pending.id];
 
   const dev = await findDeviation(payload.steps || [], payload.said ?? "");
@@ -1166,7 +1220,7 @@ async function revise(pending: ActionRunRow, payload: Payload, change: string): 
   updateActionRun(pending.id, {
     status: "awaiting_confirmation",
     summary: capitalize(describeSteps(steps)),
-    payload: JSON.stringify({ steps, said: change } satisfies Payload),
+    payload: JSON.stringify({ ...payload, steps, said: change } satisfies Payload),
   });
   return {
     replies: [
@@ -1186,6 +1240,10 @@ async function handlePendingReply(
   }
   if (pending.kind === "same_purchase") {
     return handleSamePurchase(pending, text, from);
+  }
+  if (pending.kind === "checkup") {
+    const handled = await handleStockFeedback(pending, text);
+    if (handled) return handled;
   }
 
   const payload = JSON.parse(pending.payload || "{}") as Payload;
@@ -1241,22 +1299,273 @@ async function handlePendingReply(
   }
 }
 
-async function lowStockOffer(
-  phrase: (status: string, plan: string) => string
-): Promise<AgentResult | null> {
-  const [inventory, workflows] = await Promise.all([listInventory(), listWorkflows()]);
-  const low = inventory.filter((i) => i.low);
-  const steps: Step[] = [];
-  for (const item of low) {
-    const wf = workflows.find((w) => w.fm.inventory === item.slug && w.action === "order");
-    if (wf) steps.push(orderStepFromWorkflow(wf));
+// ---------- estimated inventory & check-ups ----------
+
+type StockFeedback = { kind: "count"; amount: number } | { kind: "out" } | { kind: "some" };
+
+const ITEM_ALIASES: Record<string, string[]> = {
+  "inventory/mozzarella": ["mozz", "cheese"],
+  "inventory/pepsi-syrup": ["pepsi", "soda", "syrup"],
+  "inventory/tomato-sauce": ["sauce", "tomato"],
+  "inventory/olive-oil": ["oil", "evoo"],
+};
+
+function mentionedItems(text: string, items: InventoryItem[]): InventoryItem[] {
+  const t = text.toLowerCase();
+  return items.filter((i) =>
+    [i.name.toLowerCase(), ...(ITEM_ALIASES[i.slug] ?? [])].some((a) => t.includes(a))
+  );
+}
+
+function parseStockFeedback(text: string): StockFeedback | null {
+  const t = text.toLowerCase();
+  if (/\b(ran out|run out|out of|we'?re out|all out|none left|no more|all gone|nothing left)\b/.test(t)) {
+    return { kind: "out" };
   }
-  if (steps.length === 0) return null;
-  const status = low.map((i) => `${i.name} is down to ${i.qty} ${i.unit} (par ${i.par})`).join(". ");
-  return propose(steps, "", (plan) => phrase(status, plan));
+  const amount =
+    t.match(
+      /(\d+(?:\.\d+)?)\s*(?:lbs?|pounds?|cans?|liters?|l|boxes?|bags?)?\s*(?:left|remaining|on hand|in the (?:back|walk-?in|fridge))/
+    ) ||
+    t.match(
+      /\b(?:still have|still got|we have|i have|we got|i got|got|have|there'?s|counted)\s+(?:about |around |like |maybe |only |just |roughly |~)*(\d+(?:\.\d+)?)/
+    );
+  if (amount) return { kind: "count", amount: Number(amount[1]) };
+  if (
+    /\b(still have some|still got some|have some|got some|plenty|enough|not low|not out|not yet|still some|a good amount|we'?re (good|fine|ok|okay|set))\b/.test(t)
+  ) {
+    return { kind: "some" };
+  }
+  return null;
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Tony's correction is the only ground truth we get, so fold it into the usage estimate
+ * (half old estimate, half what his count implies) and let the schedule re-derive itself.
+ */
+async function learnFromFeedback(item: InventoryItem, fb: StockFeedback, said: string): Promise<string> {
+  const today = todayISO();
+  const name = item.name.toLowerCase();
+  const unit = item.unit;
+  const oldUse = item.daily_use;
+  const guess = `${formatAmount(item.estimate)} ${unit}`;
+  const quote = said ? ` Tony said: "${said}"` : "";
+
+  if (fb.kind === "some") {
+    const newUse = Math.max(0.1, round1(oldUse * 0.85));
+    const recheck = addDays(today, RECHECK_AFTER_DAYS);
+    await editPage(item.slug, {
+      patch: { daily_use: newUse, snooze_until: recheck },
+      replace: [[`~${oldUse} ${unit}/day`, `~${newUse} ${unit}/day`]],
+      timeline: `Tony still has some (I estimated ~${guess}). Usage estimate ${oldUse} → ${newUse} ${unit}/day; rechecking ${recheck}.`,
+    });
+    await appendTimeline(
+      BEHAVIOR_SLUG,
+      `Estimate correction: ${name} lasts longer than I thought. Usage ${oldUse} → ${newUse} ${unit}/day.${quote}`
+    );
+    return `Got it, I'll ease my ${name} estimate to ~${newUse} ${unit}/day and check back ${describeDay(recheck)}.`;
+  }
+
+  const amount = fb.kind === "out" ? 0 : fb.amount;
+  const elapsed = daysBetween(item.last_counted, today);
+  let newUse = oldUse;
+  if (elapsed > 0) {
+    const observed = Math.max(0, (item.last_count - amount) / elapsed);
+    newUse = (oldUse + observed) / 2;
+    // "Ran out" only tells us usage was at least this high
+    if (fb.kind === "out") newUse = Math.max(newUse, oldUse * 1.15);
+  }
+  newUse = Math.max(0.1, round1(newUse));
+  await editPage(item.slug, {
+    patch: { last_count: amount, last_counted: today, daily_use: newUse, snooze_until: "" },
+    replace: [[`~${oldUse} ${unit}/day`, `~${newUse} ${unit}/day`]],
+    timeline: `Tony ${fb.kind === "out" ? "ran out" : `counted ${amount} ${unit}`} (I estimated ~${guess}). Usage estimate ${oldUse} → ${newUse} ${unit}/day.`,
+  });
+  if (newUse !== oldUse) {
+    await appendTimeline(
+      BEHAVIOR_SLUG,
+      `Estimate correction: ${name} usage ${oldUse} → ${newUse} ${unit}/day after a real count (${amount} ${unit}, I guessed ~${guess}).${quote}`
+    );
+  }
+
+  const logged = fb.kind === "out" ? `Noted you're out of ${name}` : `Thanks, logging ${formatAmount(amount)} ${unit} of ${name}`;
+  if (newUse === oldUse) return `${logged}.`;
+  const direction = newUse > oldUse ? "faster" : "slower";
+  return `${logged}. You're going through it ${direction} than I thought (~${newUse} ${unit}/day, not ${oldUse}), so I've adjusted the schedule.`;
+}
+
+function estimateText(item: InventoryItem) {
+  return item.estimate < 0.5 ? "probably out" : `~${formatAmount(item.estimate)} ${item.unit}`;
+}
+
+function checkupLines(items: InventoryItem[]): string[] {
+  const lines: string[] = [];
+  const low = items.filter((i) => i.low || i.checkup_reason === "projected_low");
+  const rest = items.filter((i) => !low.includes(i));
+
+  if (low.length === 1) {
+    const i = low[0];
+    const name = i.name.toLowerCase();
+    const subject = /\s|s$/.test(name) ? `${capitalize(name)} is` : `${capitalize(name)}'s`;
+    lines.push(
+      i.estimate < 0.5 ? `${subject} probably out by now` : `${subject} probably low (${estimateText(i)} by my math)`
+    );
+  } else if (low.length > 1) {
+    lines.push(
+      `By my math you're getting low on ${joinList(low.map((i) => `${i.name.toLowerCase()} (${estimateText(i)})`))}`
+    );
+  }
+  for (const i of rest) {
+    const name = i.name.toLowerCase();
+    lines.push(
+      i.checkup_reason === "order_day"
+        ? `It's about your usual ${name} order day, and by my math you've got ${estimateText(i)} left`
+        : `Checking back on ${name} like I said (${estimateText(i)} by my math now)`
+    );
+  }
+  return lines;
+}
+
+function nextUpSummary(inventory: InventoryItem[]): string {
+  const upcoming = inventory
+    .filter((i) => i.next_checkup)
+    .sort((a, b) => a.next_checkup.localeCompare(b.next_checkup))[0];
+  if (!upcoming) return "Nothing needs a check-up today.";
+  const why =
+    upcoming.checkup_reason === "order_day"
+      ? "usual order day"
+      : upcoming.checkup_reason === "recheck"
+        ? "recheck"
+        : "projected to run low";
+  return `Nothing needs a check-up today. Next up: ${upcoming.name.toLowerCase()} ${describeDay(upcoming.next_checkup)} (${why}).`;
+}
+
+async function checkupOffer(items: InventoryItem[], greeting: string): Promise<AgentResult | null> {
+  const workflows = await listWorkflows();
+  const steps: Step[] = [];
+  const orderable: InventoryItem[] = [];
+  const headsUp: string[] = [];
+  for (const item of items) {
+    const wf = workflows.find((w) => w.fm.inventory === item.slug && w.action === "order");
+    if (wf) {
+      steps.push(orderStepFromWorkflow(wf));
+      orderable.push(item);
+    } else {
+      headsUp.push(`Heads up: ${item.name.toLowerCase()} is getting low (${estimateText(item)})`);
+    }
+  }
+  const lines = checkupLines(orderable);
+  const asked = orderable.map((i) => i.slug);
+  const lead = greeting ? `${greeting} ` : "";
+  if (steps.length === 0) {
+    return headsUp.length ? { replies: [{ body: `${lead}${headsUp.join(". ")}.` }], actions: [] } : null;
+  }
+  const tail = headsUp.length ? ` (${headsUp.join(". ")}.)` : "";
+  return propose(steps, "", (plan) => `${lead}${lines.join(". ")}. Want me to ${plan}?${tail}`, {
+    kind: "checkup",
+    buttons: CHECKUP_BUTTONS,
+    extra: { checkup: asked },
+  });
+}
+
+async function handleStockFeedback(pending: ActionRunRow, text: string): Promise<AgentResult | null> {
+  const fb = parseStockFeedback(text);
+  if (!fb) return null;
+  const payload = JSON.parse(pending.payload || "{}") as Payload;
+  const inventory = await listInventory();
+  const asked = inventory.filter((i) => payload.checkup?.includes(i.slug));
+  const mentioned = mentionedItems(text, inventory);
+  const named = mentioned.filter((i) => asked.includes(i));
+
+  if (mentioned.length && named.length === 0) {
+    const notes: string[] = [];
+    for (const item of mentioned) notes.push(await learnFromFeedback(item, fb, text));
+    return {
+      replies: [
+        {
+          body: `${notes.join(" ")} Still want me to ${describeSteps(payload.steps || [])}?`,
+          quickReplies: CHECKUP_BUTTONS,
+        },
+      ],
+      actions: [pending.id],
+    };
+  }
+
+  const targets = named.length ? named : asked;
+  if (targets.length === 0) return null;
+
+  const notes: string[] = [];
+  for (const item of targets) notes.push(await learnFromFeedback(item, fb, text));
+
+  const refreshed = await listInventory();
+  const stillLow = new Set(
+    refreshed.filter((i) => targets.some((t) => t.slug === i.slug) && i.low).map((i) => i.slug)
+  );
+  const steps = (payload.steps || []).filter(
+    (s) => !s.inventory || !targets.some((t) => t.slug === s.inventory) || stillLow.has(s.inventory)
+  );
+  const remaining = (payload.checkup || []).filter(
+    (slug) => !targets.some((t) => t.slug === slug) || stillLow.has(slug)
+  );
+
+  if (steps.length === 0) {
+    updateActionRun(pending.id, {
+      status: "done",
+      summary: `Updated ${targets.map((t) => t.name.toLowerCase()).join(" & ")} estimate`,
+      result: JSON.stringify({ results: notes }),
+    });
+    return { replies: [{ body: notes.join(" ") }], actions: [pending.id] };
+  }
+
+  updateActionRun(pending.id, {
+    status: "awaiting_confirmation",
+    summary: capitalize(describeSteps(steps)),
+    payload: JSON.stringify({ ...payload, steps, checkup: remaining } satisfies Payload),
+  });
+  const underPar = targets.filter((t) => stillLow.has(t.slug));
+  const why = underPar.length
+    ? ` That's still at or under the low point for ${underPar.map((t) => t.name.toLowerCase()).join(" & ")}.`
+    : "";
+  return {
+    replies: [
+      {
+        body: `${notes.join(" ")}${why} Want me to ${describeSteps(steps)}?`,
+        quickReplies: underPar.length ? CONFIRM_BUTTONS : CHECKUP_BUTTONS,
+      },
+    ],
+    actions: [pending.id],
+  };
+}
+
+/** Unprompted "we've got 10 lbs of mozz left" outside of a check-up. */
+async function handleUnpromptedCount(text: string): Promise<AgentResult | null> {
+  const fb = parseStockFeedback(text);
+  if (!fb) return null;
+  const inventory = await listInventory();
+  const items = mentionedItems(text, inventory);
+  if (items.length !== 1) return null;
+  const note = await learnFromFeedback(items[0], fb, text);
+  const item = (await listInventory()).find((i) => i.slug === items[0].slug)!;
+  const wf = item.low
+    ? (await listWorkflows()).find((w) => w.fm.inventory === item.slug && w.action === "order")
+    : undefined;
+  if (wf) {
+    return propose([orderStepFromWorkflow(wf)], text, (plan) => `${note} Want me to ${plan}?`, {
+      kind: "checkup",
+      extra: { checkup: [item.slug] },
+    });
+  }
+  return {
+    replies: [{ body: `${note} Next check-up on ${item.name.toLowerCase()}: ${describeDay(item.next_checkup)}.` }],
+    actions: [],
+  };
 }
 
 async function handleNewRequest(text: string, from: string): Promise<AgentResult> {
+  const counted = await handleUnpromptedCount(text);
+  if (counted) return counted;
+
   const llm = await llmPlan(text);
   const steps = llm ? llm.steps : await heuristicPlan(text);
 
@@ -1274,12 +1583,16 @@ async function handleNewRequest(text: string, from: string): Promise<AgentResult
 
   if (steps.length === 0) {
     if (llm?.answer) return { replies: [{ body: llm.answer }], actions: [] };
-    const offer = await lowStockOffer((status, plan) => `${status}. Want me to ${plan}?`);
+    const inventory = await listInventory();
+    const offer = await checkupOffer(
+      inventory.filter((i) => i.due || i.low),
+      ""
+    );
     return (
       offer ?? {
         replies: [
           {
-            body: "Everything's at or above par right now. You can also text me things like \"order a spatula\".",
+            body: `${nextUpSummary(inventory)} You can also text me things like "order a spatula" or "we've got 10 lbs of mozz left".`,
           },
         ],
         actions: [],
@@ -1333,12 +1646,21 @@ export async function handleInboundSms(from: string, body: string): Promise<Agen
   return handleNewRequest(text, from);
 }
 
-export async function runMorningCheckin(): Promise<{ text: string }> {
-  const owner = getOwnerPhone();
-  const offer = await lowStockOffer(
-    (status, plan) => `Morning Tony! ${status}. Want me to ${plan}?`
-  );
-  const reply = offer?.replies[0] ?? { body: "Morning Tony! Everything's at or above par today." };
-  await sendSms(owner, reply.body, { quickReplies: reply.quickReplies });
-  return { text: reply.body };
+/**
+ * Texts Tony about every item whose check-up is due today (projected low or usual order day),
+ * at most once per item per day. Quiet days don't send anything.
+ */
+export async function runDueCheckups(): Promise<{ text: string; sent: boolean; items: string[] }> {
+  const today = todayISO();
+  const inventory = await listInventory();
+  const due = inventory.filter((i) => i.due && !wasCheckedOn(i.slug, today));
+  if (due.length === 0) return { text: nextUpSummary(inventory), sent: false, items: [] };
+
+  const offer = await checkupOffer(due, "Morning Tony!");
+  for (const item of due) recordCheckup(item.slug, today, offer?.actions[0] ?? null);
+  const reply = offer?.replies[0];
+  if (!reply) return { text: nextUpSummary(inventory), sent: false, items: [] };
+
+  await sendSms(getOwnerPhone(), reply.body, { quickReplies: reply.quickReplies });
+  return { text: reply.body, sent: true, items: due.map((i) => i.name) };
 }

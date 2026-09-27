@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "brain:init": "gbrain init --pglite --path ./brain --no-embedding --non-interactive --no-git --force",
-    "brain:import": "bash -c 'for f in brain-seed/**/*.md; do slug=${f#brain-seed/}; slug=${slug%.md}; gbrain put \"$slug\" --force < \"$f\"; done'",
+    "brain:import": "PATH=\"$HOME/.bun/bin:$PATH\" node scripts/seed-put.mjs",
     "brain:doctor": "gbrain doctor --fast",
     "demo:reset": "bash scripts/reset-demo.sh"
   },

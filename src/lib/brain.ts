@@ -2,6 +2,7 @@ import { execFile, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
+import { addDays, daysBetween, todayISO } from "./clock";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,10 +54,20 @@ export function parseTimeline(content: string): string[] {
     .map((line) => line.slice(2).trim());
 }
 
+/** Seeds use {{-N}} for "N days before the demo starts" so the story never goes stale. */
+function resolveSeedDates(content: string): string {
+  const today = todayISO();
+  return content.replace(/\{\{(-?\d+)\}\}/g, (_, n) => addDays(today, Number(n)));
+}
+
 function ensureLive() {
   if (!fs.existsSync(LIVE_ROOT)) {
     fs.mkdirSync(path.dirname(LIVE_ROOT), { recursive: true });
     fs.cpSync(SEED_ROOT, LIVE_ROOT, { recursive: true });
+    for (const slug of walkMarkdown(LIVE_ROOT)) {
+      const file = livePathForSlug(slug);
+      fs.writeFileSync(file, resolveSeedDates(fs.readFileSync(file, "utf8")));
+    }
   }
 }
 
@@ -212,7 +223,7 @@ export async function editPage(
   }
 
   if (edit.timeline) {
-    const entry = `- ${new Date().toISOString().slice(0, 10)}: ${edit.timeline}`;
+    const entry = `- ${todayISO()}: ${edit.timeline}`;
     timeline = timeline
       ? timeline.replace("## Timeline", `## Timeline\n${entry}`)
       : `## Timeline\n${entry}\n`;
@@ -229,8 +240,59 @@ export function appendTimeline(slug: string, note: string) {
 export async function appendActionMemory(summary: string): Promise<void> {
   const slug = "actions/log";
   const existing = (await getPage(slug))?.content || "# Actions Log\n\n";
-  const next = `${existing.trim()}\n\n## ${new Date().toISOString()}\n${summary}\n`;
+  const next = `${existing.trim()}\n\n## ${todayISO()} ${new Date().toISOString().slice(11, 19)}\n${summary}\n`;
   await putPage(slug, next);
+}
+
+export type CheckupReason = "projected_low" | "order_day" | "recheck";
+
+/** Rounds an estimated amount the way Tony would say it: whole units, or halves for small amounts. */
+export function formatAmount(n: number): string {
+  if (n >= 10) return String(Math.round(n));
+  return String(Math.round(n * 2) / 2);
+}
+
+/**
+ * Nobody weighs the cheese, so on-hand amounts are projections from the last count and an
+ * estimated daily usage. The next check-up is the earlier of "projected to hit the low point"
+ * and "usual order day", pushed back by any snooze from a "still have some" reply.
+ */
+function projectItem(fm: Record<string, string | number>) {
+  const today = todayISO();
+  const par = Number(fm.par ?? 0);
+  const lastCount = Number(fm.last_count ?? 0);
+  const lastCounted = String(fm.last_counted || today);
+  const dailyUse = Number(fm.daily_use ?? 0);
+  const every = Number(fm.order_every_days ?? 0);
+  const lastOrdered = fm.last_ordered ? String(fm.last_ordered) : "";
+  const snooze = fm.snooze_until ? String(fm.snooze_until) : "";
+
+  const elapsed = Math.max(0, daysBetween(lastCounted, today));
+  const estimate = Math.max(0, lastCount - dailyUse * elapsed);
+
+  const candidates: { date: string; reason: CheckupReason }[] = [];
+  if (dailyUse > 0) {
+    const daysToLow = Math.ceil((lastCount - par) / dailyUse - 1e-9);
+    candidates.push({ date: addDays(lastCounted, Math.max(0, daysToLow)), reason: "projected_low" });
+  }
+  if (every > 0 && lastOrdered) {
+    candidates.push({ date: addDays(lastOrdered, every), reason: "order_day" });
+  }
+  candidates.sort((a, b) => a.date.localeCompare(b.date));
+  let next = candidates[0] ?? null;
+  if (next && snooze && snooze > next.date) next = { date: snooze, reason: "recheck" };
+
+  return {
+    estimate,
+    daily_use: dailyUse,
+    last_count: lastCount,
+    last_counted: lastCounted,
+    days_left: dailyUse > 0 ? estimate / dailyUse : null,
+    next_checkup: next?.date ?? "",
+    checkup_reason: next?.reason ?? null,
+    due: !!next && next.date <= today,
+    low: estimate <= par,
+  };
 }
 
 export async function listInventory() {
@@ -238,16 +300,18 @@ export async function listInventory() {
   return pages.map((p) => ({
     slug: p.slug,
     name: String(p.frontmatter.name || p.title),
-    qty: Number(p.frontmatter.qty ?? 0),
     unit: String(p.frontmatter.unit || ""),
     par: Number(p.frontmatter.par ?? 0),
     supplier: String(p.frontmatter.supplier || ""),
     sku: String(p.frontmatter.sku || ""),
     reorder_qty: Number(p.frontmatter.reorder_qty ?? 0),
-    low: Number(p.frontmatter.qty ?? 0) < Number(p.frontmatter.par ?? 0),
+    order_every_days: Number(p.frontmatter.order_every_days ?? 0),
+    ...projectItem(p.frontmatter),
     content: p.content,
   }));
 }
+
+export type InventoryItem = Awaited<ReturnType<typeof listInventory>>[number];
 
 export async function listAppliances() {
   const pages = await listPages("appliances/");

@@ -8,11 +8,7 @@ rm -rf data
 mkdir -p data
 
 if command -v gbrain >/dev/null 2>&1; then
-  shopt -s globstar
-  for f in brain-seed/**/*.md; do
-    slug="${f#brain-seed/}"
-    gbrain put "${slug%.md}" --force < "$f" >/dev/null || true
-  done
+  node scripts/seed-put.mjs >/dev/null || true
 fi
 
 echo "Demo reset. Restart npm run dev if the server is already running."

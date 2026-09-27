@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { runMorningCheckin } from "./agent";
+import { runDueCheckups } from "./agent";
 
 type GlobalSched = { __oyoiSchedulerStarted?: boolean };
 
@@ -8,15 +8,15 @@ export function startScheduler() {
   if (g.__oyoiSchedulerStarted) return;
   g.__oyoiSchedulerStarted = true;
 
-  // 8:00 AM local time daily
+  // 8:00 AM local time daily: text Tony about any items whose check-up is due
   cron.schedule("0 8 * * *", async () => {
     try {
-      console.log("[scheduler] morning check-in");
-      await runMorningCheckin();
+      const result = await runDueCheckups();
+      console.log(`[scheduler] check-ups: ${result.sent ? result.items.join(", ") : "none due"}`);
     } catch (err) {
-      console.error("[scheduler] check-in failed", err);
+      console.error("[scheduler] check-ups failed", err);
     }
   });
 
-  console.log("[scheduler] morning check-in cron registered (0 8 * * *)");
+  console.log("[scheduler] daily inventory check-up cron registered (0 8 * * *)");
 }

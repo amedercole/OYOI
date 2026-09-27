@@ -49,13 +49,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clock, setClock] = useState<{ today: string; offsetDays: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch("/api/messages");
-      const data = await res.json();
+      const [msgRes, clockRes] = await Promise.all([fetch("/api/messages"), fetch("/api/demo/clock")]);
+      const data = await msgRes.json();
       setMessages(data.messages || []);
+      setClock(await clockRes.json());
     } catch {
       /* ignore */
     }
@@ -91,10 +94,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function runCheckin() {
+  async function runCheckups(url: string) {
     setBusy(true);
+    setNotice(null);
     try {
-      await fetch("/api/checkin", { method: "POST" });
+      const res = await fetch(url, { method: "POST" });
+      const data = (await res.json()) as { sent?: boolean; text?: string };
+      if (!data.sent && data.text) setNotice(data.text);
       await refresh();
     } finally {
       setBusy(false);
@@ -103,6 +109,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   async function resetDemo() {
     setBusy(true);
+    setNotice(null);
     try {
       await fetch("/api/demo/reset", { method: "POST" });
       await refresh();
@@ -110,6 +117,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
       setBusy(false);
     }
   }
+
+  const demoDate = clock
+    ? new Date(`${clock.today}T12:00:00Z`).toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      })
+    : "";
 
   const last = messages[messages.length - 1];
   const buttons = last?.direction === "outbound" ? last.quick_replies ?? [] : [];
@@ -148,10 +164,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <strong>Owner phone</strong>
             <div className="muted">SMS mirror</div>
           </div>
-          <button className="btn btn-accent" onClick={runCheckin} disabled={busy}>
+          <button className="btn btn-accent" onClick={() => runCheckups("/api/checkin")} disabled={busy}>
             Run check-in
           </button>
         </div>
+        <div className="demo-clock">
+          <span>
+            Demo day: <strong>{demoDate || "…"}</strong>
+            {clock && clock.offsetDays > 0 ? ` (+${clock.offsetDays})` : ""}
+          </span>
+          <button className="btn" onClick={() => runCheckups("/api/demo/advance")} disabled={busy}>
+            Fast-forward a day
+          </button>
+        </div>
+        {notice && <div className="demo-notice">{notice}</div>}
         <div className="thread" ref={threadRef}>
           {messages.length === 0 && (
             <p className="muted empty">No messages yet. Run a check-in or text the agent.</p>

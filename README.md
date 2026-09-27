@@ -2,9 +2,26 @@
 
 Hackathon MVP: a small-restaurant owner texts a Twilio number, and an AI agent backed by **GBrain** memory manages ingredient inventory — emailing suppliers and ordering on supplier websites via Browser Use.
 
+## Estimated inventory and check-ups
+
+Small restaurants don't have scales or POS-linked stock, so nothing here is a live count. Each inventory page in GBrain stores the last count, an estimated daily usage, a low point, and the usual order cadence. The agent projects what's on hand and schedules a check-up for the **earlier** of "projected to hit the low point" and "usual order day". A daily 8am cron texts Tony about anything due, at most once per item per day.
+
+Check-ups offer the reorder straight away, with **Yes** / **Change** / **Still have some** buttons. Tony's corrections tune the estimates automatically, and the agent says so in one line:
+
+- **Still have some** (or "we're good" / "not yet"): eases the usage estimate by 15% and checks back in 2 days.
+- **A count** (e.g. "about 4 lbs left"): logs a real count and blends the usage it implies 50/50 with the old estimate. If the count is still under the low point, the offer stands.
+- **Ran out**: logs 0, bumps usage up, and re-offers the order.
+- **Unprompted counts** also work, e.g. "we've got 10 lbs of mozz left".
+- **An order** logs the delivery as a fresh count and resets the usual-order-day clock.
+
+Every correction lands on the item's GBrain timeline and in the behavior log on `/brain`.
+
+**Demo clock:** the phone mirror has **Fast-forward a day**, which advances a demo date and fires any check-ups that come due. **Reset demo** rewinds it. Seed dates are relative (`{{-4}}` = 4 days before the demo starts), so the story works any day.
+
 ## Demo story
 
-1. Dashboard shows mozzarella **low** (3 / 15 lbs). Click **Run check-in**. The owner gets: "Mozzarella is down to 3 lbs. Want me to order the usual 20 lbs from Company B (~$90)?" with **Yes** / **Change** buttons.
+1. Reset the demo. Inventory shows mozzarella at ~8 lbs, with its next check-up **tomorrow** (projected low). Click **Fast-forward a day**. The owner gets: "Morning Tony! Mozzarella's probably low (~5 lbs by my math). Want me to order the usual 20 lbs of mozzarella from Company B (~$90)?" with **Yes** / **Change** / **Still have some**.
+   - Optional detour: tap **Still have some**. The agent says "I'll ease my mozzarella estimate to ~2.6 lbs/day and check back Wednesday." Fast-forward twice and it checks back. Reply "about 4 lbs left" to see it recalibrate from a real count.
 2. Tap **Change**. The agent asks what should be different.
 3. Owner: `Make it 30 lbs, big weekend coming. Also tell Bob to push Pepsi to the 5th instead of the 15th`. The agent restates the revised plan, again with Yes / Change.
 4. Owner approves however they like (`sounds good`, `yep go ahead`, a thumbs-up, or the Yes button). Bob gets an email, the browser agent checks out on Company B (`/supplier`), and inventory updates.
@@ -12,6 +29,8 @@ Hackathon MVP: a small-restaurant owner texts a Twilio number, and an AI agent b
 6. Either answer is recorded in GBrain. "Default" rewrites the workflow (see `/workflows`); "just this once" logs a one-off. Both show on `/brain` under "What I've learned about how Tony works".
 
 Replies don't have to match the buttons: "nah not today" cancels, "make it 25 instead" edits in one step, "skip the email" drops a step. Real SMS can't render buttons, so texts get a short `(Yes / Change)` hint instead. Use **Reset demo** in the sidebar between rehearsals.
+
+Keep fast-forwarding and more check-ups arrive. On day 5, tomato sauce hits its usual order day. On day 6, flour and olive oil come due together and are offered as one Company B order ("skip the oil and make it 60 lbs of flour" works). `python3 scripts/rehearse-checkups.py` replays the whole week against a running dev server.
 
 ### Text-to-shop (spatula)
 
@@ -46,11 +65,8 @@ curl -fsSL https://bun.sh/install | bash
 bun install -g github:garrytan/gbrain#latest-stable
 
 # 3. Init brain + import seed
-gbrain init --pglite --path ./brain --no-embedding --non-interactive --no-git --force
-for f in brain-seed/**/*.md; do
-  slug="${f#brain-seed/}"; slug="${slug%.md}"
-  gbrain put "$slug" < "$f"
-done
+npm run brain:init
+npm run brain:import   # resolves relative {{-N}} seed dates, then gbrain put for each page
 
 # 4. Env
 cp .env.local.example .env.local
@@ -77,7 +93,8 @@ Without Twilio keys, use the **phone mirror** on the right of the dashboard to s
 | `/brain` | Memory pages + diffs |
 | `/supplier` | Mock Company B storefront |
 | `/api/twilio/inbound` | Twilio SMS webhook |
-| `/api/checkin` | Morning check-in (also dashboard button) |
+| `/api/checkin` | Run today's due check-ups (also the **Run check-in** button) |
+| `/api/demo/advance` POST | Demo clock +1 day, then run due check-ups (**Fast-forward a day**) |
 | `/api/actions` POST | Simulate inbound SMS from UI |
 
 ## Brain seed
@@ -85,7 +102,7 @@ Without Twilio keys, use the **phone mirror** on the right of the dashboard to s
 Markdown in `brain-seed/` is the pristine starting state. On first run it's copied to `data/brain/` (the live copy the agent edits and syncs to GBrain), and **Reset demo** restores it.
 
 - `company/tonys-pizzeria.md`
-- `inventory/*.md`
+- `inventory/*.md` (`last_count`, `last_counted`, `daily_use`, `par` = low point, `order_every_days`, `last_ordered`)
 - `appliances/*.md`
 - `suppliers/company-b.md`, `contacts/bob-pepsi.md`
 - `workflows/*.md` (usual quantities live in frontmatter, e.g. `default_qty`)
