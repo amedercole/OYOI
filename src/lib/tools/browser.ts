@@ -137,58 +137,6 @@ export async function runBrowserTask(opts: RunOptions): Promise<BrowserTaskResul
   }
 }
 
-export type BrowserOrderResult = BrowserTaskResult;
-
-/** Places an order on the mock Company B storefront (demo mozzarella flow). */
-export async function placeOrderViaBrowser(input: {
-  storeUrl: string;
-  productName: string;
-  quantity: number;
-  sku?: string;
-  onLiveUrl?: (url: string) => void;
-}): Promise<BrowserOrderResult> {
-  const task = [
-    `Go to ${input.storeUrl}.`,
-    `Find the product "${input.productName}"${input.sku ? ` (SKU ${input.sku})` : ""}.`,
-    `Set quantity to ${input.quantity}.`,
-    `Add to cart, go to checkout, and complete the order with the card already on file.`,
-    `Return the order confirmation number shown on the success page.`,
-  ].join(" ");
-
-  if (!apiKey()) {
-    const confirmationNumber = `CB-${Date.now().toString().slice(-8)}`;
-    console.log("[browser:mock] placing order", input, "→", confirmationNumber);
-    return {
-      ok: true,
-      mocked: true,
-      taskId: `mock_${confirmationNumber}`,
-      liveUrl: null,
-      confirmationNumber,
-      steps: [
-        `Opened ${input.storeUrl}`,
-        `Selected ${input.productName} x${input.quantity}`,
-        "Added to cart",
-        "Checked out with card on file",
-        `Confirmation ${confirmationNumber}`,
-      ],
-    };
-  }
-
-  const result = await runBrowserTask({
-    task,
-    startUrl: input.storeUrl,
-    maxSteps: 25,
-    onLiveUrl: input.onLiveUrl,
-  });
-
-  const confirmationMatch = (result.output || "").match(/CB-\d+|[A-Z]{2,}-\d{5,}/);
-  return {
-    ...result,
-    confirmationNumber:
-      confirmationMatch?.[0] || (result.ok ? `CB-${Date.now().toString().slice(-8)}` : undefined),
-  };
-}
-
 export type ProductForCart = {
   title: string;
   price: string;

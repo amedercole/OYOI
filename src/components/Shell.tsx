@@ -27,7 +27,6 @@ const NAV = [
   { href: "/workflows", label: "Workflows" },
   { href: "/actions", label: "Actions" },
   { href: "/brain", label: "Brain" },
-  { href: "/supplier", label: "Supplier" },
 ];
 
 function linkify(text: string): ReactNode[] {

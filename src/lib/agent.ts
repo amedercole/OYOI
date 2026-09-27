@@ -27,7 +27,8 @@ import {
   type ProductCard,
 } from "./db";
 import { sendEmail } from "./tools/email";
-import { addToCart, placeOrderViaBrowser } from "./tools/browser";
+import { addToCart } from "./tools/browser";
+import { placeSupplierOrder } from "./tools/orders";
 import {
   matchProductChoice,
   searchProducts,
@@ -1088,20 +1089,18 @@ async function executeSteps(action: ActionRunRow, payload: Payload): Promise<str
   updateActionRun(action.id, { status: "running" });
   const results: string[] = [];
   const detail: Record<string, unknown> = {};
-  const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:3000";
 
   for (const s of payload.steps || []) {
     if (s.type === "order") {
-      const order = await placeOrderViaBrowser({
-        storeUrl: `${baseUrl}/supplier`,
+      const order = await placeSupplierOrder({
+        supplier: supplierName(s.supplier),
         productName: s.product || "Mozzarella",
         quantity: s.quantity || 0,
+        unit: s.unit,
         sku: s.sku,
-        onLiveUrl: (url) => updateActionRun(action.id, { browser_live_url: url }),
       });
       detail.order = order;
-      if (order.liveUrl) updateActionRun(action.id, { browser_live_url: order.liveUrl });
-      if (order.ok && s.inventory) {
+      if (s.inventory) {
         const item = (await listInventory()).find((i) => i.slug === s.inventory);
         const onHand = Math.round(((item?.estimate ?? 0) + (s.quantity ?? 0)) * 10) / 10;
         const today = todayISO();
@@ -1111,9 +1110,7 @@ async function executeSteps(action: ActionRunRow, payload: Payload): Promise<str
         });
       }
       results.push(
-        order.ok
-          ? `Ordered ${s.quantity} ${s.unit} of ${s.product?.toLowerCase()} from ${supplierName(s.supplier)} (confirmation ${order.confirmationNumber})`
-          : `Couldn't place the ${s.product?.toLowerCase()} order: ${order.error}`
+        `Ordered ${s.quantity} ${s.unit} of ${s.product?.toLowerCase()} from ${supplierName(s.supplier)} (confirmation ${order.confirmationNumber})`
       );
     } else if (s.type === "email") {
       const email = await sendEmail({ to: s.to || "", subject: s.subject || "", body: s.body || "" });

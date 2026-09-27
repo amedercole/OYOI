@@ -1,6 +1,6 @@
 # OYOI
 
-Hackathon MVP: a small-restaurant owner texts a Twilio number, and an AI agent backed by **GBrain** memory manages ingredient inventory — emailing suppliers and ordering on supplier websites via Browser Use.
+Hackathon MVP: a small-restaurant owner texts a Twilio number, and an AI agent backed by **GBrain** memory manages ingredient inventory — reordering from suppliers, emailing reps, and shopping for new items online via Browser Use.
 
 ## Estimated inventory and check-ups
 
@@ -24,7 +24,7 @@ Every correction lands on the item's GBrain timeline and in the behavior log on 
    - Optional detour: tap **Still have some**. The agent says "I'll ease my mozzarella estimate to ~2.6 lbs/day and check back Wednesday." Fast-forward twice and it checks back. Reply "about 4 lbs left" to see it recalibrate from a real count.
 2. Tap **Change**. The agent asks what should be different.
 3. Owner: `Make it 30 lbs, big weekend coming. Also tell Bob to push Pepsi to the 5th instead of the 15th`. The agent restates the revised plan, again with Yes / Change.
-4. Owner approves however they like (`sounds good`, `yep go ahead`, a thumbs-up, or the Yes button). Bob gets an email, the browser agent checks out on Company B (`/supplier`), and inventory updates.
+4. Owner approves however they like (`sounds good`, `yep go ahead`, a thumbs-up, or the Yes button). Bob gets an email, the Company B order goes through (mocked, with a `CB-…` confirmation), and inventory updates.
 5. Because 30 lbs breaks from the mozzarella workflow, the agent asks: "Your usual is 20 lbs. Want 30 lbs to be the new normal?" with **Make it the default** / **Just this once**.
 6. Either answer is recorded in GBrain. "Default" rewrites the workflow (see `/workflows`); "just this once" logs a one-off. Both show on `/brain` under "What I've learned about how Tony works".
 
@@ -50,7 +50,8 @@ Without `SERPER_API_KEY`, shopping uses a curated demo catalog. Without `BROWSER
 - SQLite for SMS log + action runs
 - Resend / Gmail for email
 - Serper Google Shopping (optional) + curated fallback catalog
-- Browser Use Cloud (optional) for virtual-browser cart adds and mock `/supplier` checkout
+- Browser Use Cloud (optional) for virtual-browser cart adds when shopping
+- Ingredient reorders from suppliers (Company B) are mocked with a confirmation number
 
 **Must run as a long-lived Node process** (`npm run dev`), not Vercel serverless. Expose with ngrok or cloudflared so Twilio can reach `/api/twilio/inbound`.
 
@@ -91,7 +92,6 @@ Without Twilio keys, use the **phone mirror** on the right of the dashboard to s
 | `/workflows` | Enshrined actions |
 | `/actions` | Live / finished action runs |
 | `/brain` | Memory pages + diffs |
-| `/supplier` | Mock Company B storefront |
 | `/api/twilio/inbound` | Twilio SMS webhook |
 | `/api/checkin` | Run today's due check-ups (also the **Run check-in** button) |
 | `/api/demo/advance` POST | Demo clock +1 day, then run due check-ups (**Fast-forward a day**) |
