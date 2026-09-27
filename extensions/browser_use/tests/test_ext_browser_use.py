@@ -139,7 +139,7 @@ class _Sandbox:
         self.writes[path] = content
 
 
-async def _keyed_workspace() -> UUID:
+async def _keyed_workspace(profile: str | None = None) -> UUID:
     workspace_id = uuid4()
     async with workspace_tx() as connection:
         await connection.execute(
@@ -150,6 +150,8 @@ async def _keyed_workspace() -> UUID:
     store = CredentialStore(fernet=Fernet(Fernet.generate_key()))
     init_workspace_credentials(store)
     await store.put(workspace_id, browser_use.API_KEY_SLOT, API_KEY)
+    if profile is not None:
+        await store.put(workspace_id, browser_use.PROFILE_SLOT, profile)
     return workspace_id
 
 
@@ -175,7 +177,9 @@ def _context(
         audience=conversation_audience(None),
         artifact_token_secret="",
         idempotency_key=idempotency_key,
-        ext=context_for(browser_use.NAME, frozenset({browser_use.API_KEY_SLOT})),
+        ext=context_for(
+            browser_use.NAME, frozenset({browser_use.API_KEY_SLOT, browser_use.PROFILE_SLOT})
+        ),
     )
 
 
@@ -197,9 +201,11 @@ def test_manifest_publishes_the_browser_packs_two_tools_and_nothing_else() -> No
     assert manifest.name == "browser_use"
     assert [tool.name for tool in manifest.tools] == ["browser_task", "wide_browse"]
     assert all(tool.untrusted for tool in manifest.tools)
-    (slot,) = manifest.credentials
-    assert slot.name == "browser_use_api_key"
-    assert slot.injection is None
+    assert [slot.name for slot in manifest.credentials] == [
+        "browser_use_api_key",
+        "browser_use_profile_id",
+    ]
+    assert all(slot.injection is None for slot in manifest.credentials)
     (section,) = manifest.prompt_sections
     assert section.name == "browser"
     assert not manifest.subagents
@@ -261,6 +267,7 @@ async def test_a_run_that_finished_just_before_the_deadline_keeps_its_result(
             model=browser_use.TASK_MODEL,
             max_cost_usd=browser_use.TASK_MAX_COST_USD,
             save_outputs=True,
+            signed_in=True,
             transport=httpx.MockTransport(api.handle),
         ).execute(ctx, "t", timeout_seconds=0.05)
     assert api.sent("POST", f"/api/v4/runs/{RUN_ID}/cancel") == []
@@ -633,3 +640,66 @@ async def test_a_non_https_output_url_is_refused_before_it_is_fetched(
         )
     assert not sandbox.writes
     assert not [r for r in api.requests if r.url.host == "169.254.169.254"]
+
+
+def _browser_settings(api: _Api) -> list[dict[str, object]]:
+    return [
+        json.loads(request.content)["browserSettings"]
+        for request in api.sent("POST", "/api/v4/runs")
+    ]
+
+
+async def test_browser_task_carries_the_workspace_profile_and_wide_browse_does_not(
+    db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fast_poll: None
+) -> None:
+    api = _Api(statuses=["completed"], files=[])
+    _wire(monkeypatch, api)
+    workspace_id = await _keyed_workspace(profile="prof_kitchen")
+    sandbox = _Sandbox(files={"entities.txt": "a.test\n", "schema.json": "{}"})
+    with ws(workspace_id):
+        await _tool("browser_task").handler(
+            _context(sandbox, tmp_path),
+            BrowserTaskInput(url="https://www.amazon.com", task="t", task_name="n"),
+        )
+        await _tool("wide_browse").handler(
+            _context(sandbox, tmp_path),
+            WideBrowseInput(
+                entities_file="entities.txt",
+                prompt_template="visit {entity}",
+                output_schema_file="schema.json",
+            ),
+        )
+    task_settings, wide_settings = _browser_settings(api)
+    assert task_settings["profileId"] == "prof_kitchen"
+    assert "profileId" not in wide_settings
+
+
+async def test_a_workspace_without_a_profile_browses_anonymous(
+    db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fast_poll: None
+) -> None:
+    api = _Api(statuses=["completed"], files=[])
+    _wire(monkeypatch, api)
+    workspace_id = await _keyed_workspace()
+    with ws(workspace_id):
+        await _tool("browser_task").handler(
+            _context(_Sandbox(), tmp_path),
+            BrowserTaskInput(url="https://www.amazon.com", task="t", task_name="n"),
+        )
+    (settings,) = _browser_settings(api)
+    assert "profileId" not in settings
+
+
+async def test_a_deploy_model_setting_replaces_the_task_model(
+    db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fast_poll: None
+) -> None:
+    monkeypatch.setenv(f"UFO_{browser_use.TASK_MODEL_ENV}", "gemini-3.6-flash")
+    api = _Api(statuses=["completed"], files=[])
+    _wire(monkeypatch, api)
+    workspace_id = await _keyed_workspace()
+    with ws(workspace_id):
+        await _tool("browser_task").handler(
+            _context(_Sandbox(), tmp_path),
+            BrowserTaskInput(url="https://www.amazon.com", task="t", task_name="n"),
+        )
+    (created,) = api.sent("POST", "/api/v4/runs")
+    assert json.loads(created.content)["model"] == "gemini-3.6-flash"

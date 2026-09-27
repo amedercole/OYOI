@@ -26,6 +26,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from ufo.sdk.context import CredentialAccess, ScopedStore
+from ufo.sdk.credentials import deploy_env
 from ufo.sdk.manifest import CredentialSlot, Manifest, PromptSection
 from ufo.sdk.sandbox import workspace_path
 from ufo.sdk.tools import TextContent, ToolContext, ToolDef, ToolResult
@@ -35,6 +36,7 @@ VERSION = "0.1.0"
 
 API_BASE = "https://api.browser-use.com/api/v4"
 API_KEY_SLOT = "browser_use_api_key"
+PROFILE_SLOT = "browser_use_profile_id"
 API_KEY_HEADER = "X-Browser-Use-API-Key"
 HTTPS_PREFIX = "https://"
 REQUEST_TIMEOUT_SECONDS = 30
@@ -42,6 +44,9 @@ POLL_SECONDS = 3
 PROXY_COUNTRY = "us"
 
 TASK_MODEL = "claude-sonnet-5"
+TASK_MODEL_ENV = "BROWSER_USE_TASK_MODEL"
+"""A deploy that trades care for speed names a faster Browser Use model here; unset keeps
+`TASK_MODEL`."""
 TASK_MAX_COST_USD = 2.0
 WIDE_BROWSE_MODEL = "gemini-3.5-flash"
 WIDE_BROWSE_MAX_COST_USD = 0.5
@@ -67,8 +72,9 @@ BROWSER_USE_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 BROWSER_TASK_DESCRIPTION = (
     "Automates a full browser session: navigating websites, filling forms, clicking buttons, "
-    "extracting information, multi-step web actions. Runs in an isolated cloud browser (no saved "
-    "sessions/cookies). Each call starts a FRESH session — include ALL context in the task "
+    "extracting information, multi-step web actions. Runs in a cloud browser that carries the "
+    "workspace's saved sign-ins when an admin has linked a Browser Use profile, and none "
+    "otherwise. Each call starts a FRESH session — include ALL context in the task "
     "description since the agent has no conversation history. Cannot manipulate browser extensions."
 )
 WIDE_BROWSE_DESCRIPTION = (
@@ -123,15 +129,18 @@ class HostedRun:
     """One Browser Use run, start to finish: create it, watch it to a terminal status, read its
     result, and carry its own output files into the workspace.
 
-    `model`, `max_cost_usd` and `save_outputs` are the caller's policy, not the run's —
-    `browser_task` buys one careful session and keeps its files, `wide_browse` buys many cheap ones
-    and keeps only the rows it collects. `transport` is the httpx testability seam; production
-    leaves it None."""
+    `model`, `max_cost_usd`, `save_outputs` and `signed_in` are the caller's policy, not the run's —
+    `browser_task` buys one careful session, keeps its files, and carries the workspace's saved
+    sign-ins; `wide_browse` buys many cheap anonymous ones and keeps only the rows it collects. A
+    signed-in run uses the Browser Use profile the workspace stored in `PROFILE_SLOT`, which holds
+    the member's cookies, never their password; a workspace that stored none runs anonymous.
+    `transport` is the httpx testability seam; production leaves it None."""
 
     credentials: CredentialAccess
     model: str
     max_cost_usd: float
     save_outputs: bool
+    signed_in: bool
     transport: httpx.AsyncBaseTransport | None = None
 
     async def execute(
@@ -145,13 +154,18 @@ class HostedRun:
             raise RuntimeError("browser_use tools need their extension context")
         store = ctx.ext.store
         key = await self.credentials.get(API_KEY_SLOT)
+        profile = (
+            await self.credentials.get(PROFILE_SLOT)
+            if self.signed_in and await self.credentials.stored(PROFILE_SLOT)
+            else None
+        )
         async with httpx.AsyncClient(
             base_url=API_BASE,
             timeout=REQUEST_TIMEOUT_SECONDS,
             transport=self.transport,
             headers={API_KEY_HEADER: key},
         ) as http:
-            run = await self._start(http, store, task, dedup_key)
+            run = await self._start(http, store, task, dedup_key, profile)
             try:
                 async with asyncio.timeout(timeout_seconds):
                     status = await self._watch(http, run.id)
@@ -172,7 +186,12 @@ class HostedRun:
             return RunOutcome(status, str(output or ""), saved, skipped, more_files)
 
     async def _start(
-        self, http: httpx.AsyncClient, store: ScopedStore, task: str, dedup_key: str | None
+        self,
+        http: httpx.AsyncClient,
+        store: ScopedStore,
+        task: str,
+        dedup_key: str | None,
+        profile: str | None,
     ) -> StartedRun:
         """The API cannot name a run before it exists, so a crash between creating and recording it
         re-runs."""
@@ -187,7 +206,8 @@ class HostedRun:
                     "task": task,
                     "model": self.model,
                     "maxCostUsd": self.max_cost_usd,
-                    "browserSettings": {"proxyCountryCode": PROXY_COUNTRY},
+                    "browserSettings": {"proxyCountryCode": PROXY_COUNTRY}
+                    | ({} if profile is None else {"profileId": profile}),
                 },
             )
         )
@@ -329,9 +349,10 @@ async def _browser_task(ctx: ToolContext, args: BrowserTaskInput) -> ToolResult:
         raise RuntimeError("browser_use tools need their extension context")
     outcome = await HostedRun(
         credentials=ctx.ext.credentials,
-        model=TASK_MODEL,
+        model=deploy_env(TASK_MODEL_ENV) or TASK_MODEL,
         max_cost_usd=TASK_MAX_COST_USD,
         save_outputs=True,
+        signed_in=True,
         transport=BROWSER_USE_TRANSPORT,
     ).execute(
         ctx,
@@ -394,6 +415,7 @@ async def _wide_browse(ctx: ToolContext, args: WideBrowseInput) -> ToolResult:
         model=WIDE_BROWSE_MODEL,
         max_cost_usd=WIDE_BROWSE_MAX_COST_USD,
         save_outputs=False,
+        signed_in=False,
         transport=BROWSER_USE_TRANSPORT,
     )
 
@@ -464,6 +486,14 @@ def manifest() -> Manifest:
                 description=(
                     "BYOK Browser Use API key; the run flow reads it in-process, host-side, to "
                     "drive the hosted browser agent."
+                ),
+            ),
+            CredentialSlot(
+                name=PROFILE_SLOT,
+                description=(
+                    "Browser Use profile id holding the workspace's saved sign-ins (cookies, never "
+                    "passwords); browser_task runs carry it. Created by running Browser Use's "
+                    "profile sync after signing in to the sites locally."
                 ),
             ),
         ),

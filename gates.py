@@ -1791,6 +1791,7 @@ ENVIRON_KEY_METHODS = frozenset({"get", "pop", "setdefault"})
 ENV_SETTINGS = frozenset(
     {
         "BROWSERBASE_PROXIES",
+        "BROWSER_USE_TASK_MODEL",
         "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
         "PIPEDREAM_ENVIRONMENT",
         "PIPEDREAM_GITHUB_OAUTH_APP_ID",
