@@ -11,9 +11,8 @@ reorder_qty: 20
 # Mozzarella
 
 ## Compiled Truth
-Fresh whole-milk mozzarella for pizzas. Currently **LOW** (3 lbs vs par 15).
-Supplier: Company B (website order). Standard reorder: 20 lbs ($4.50/lb = ~$90).
-Workflow: when low, propose website order from Company B.
+Fresh whole-milk mozzarella for pizzas. Par level is 15 lbs.
+Supplier: Company B (website order). Standard reorder: 20 lbs at $4.50/lb.
 
 ## Timeline
 - 2026-09-27: Stock counted at 3 lbs during morning check

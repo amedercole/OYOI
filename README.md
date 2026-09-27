@@ -1,14 +1,17 @@
-# OYOI — Ops You Only Inbox
+# OYOI
 
 Hackathon MVP: a small-restaurant owner texts a Twilio number, and an AI agent backed by **GBrain** memory manages ingredient inventory — emailing suppliers and ordering on supplier websites via Browser Use.
 
 ## Demo story
 
-1. Dashboard shows mozzarella **low** (3 / 15 lbs). Click **Run check-in** → owner phone buzzes.
-2. Owner texts: `Yes order cheese, and tell Bob the Pepsi guy to deliver on the 5th instead of the 15th.`
-3. Agent recalls workflows from GBrain and replies with a plan + cost. Reply `YES`.
-4. Bob gets an email; browser agent checks out on Company B (`/supplier`); inventory updates; actions show as done.
-5. Owner texts: `Remember we switched to oat milk.` → **Brain** page shows the diff.
+1. Dashboard shows mozzarella **low** (3 / 15 lbs). Click **Run check-in**. The owner gets: "Mozzarella is down to 3 lbs. Want me to order the usual 20 lbs from Company B (~$90)?" with **Yes** / **Change** buttons.
+2. Tap **Change**. The agent asks what should be different.
+3. Owner: `Make it 30 lbs, big weekend coming. Also tell Bob to push Pepsi to the 5th instead of the 15th`. The agent restates the revised plan, again with Yes / Change.
+4. Owner approves however they like (`sounds good`, `yep go ahead`, a thumbs-up, or the Yes button). Bob gets an email, the browser agent checks out on Company B (`/supplier`), and inventory updates.
+5. Because 30 lbs breaks from the mozzarella workflow, the agent asks: "Your usual is 20 lbs. Want 30 lbs to be the new normal?" with **Make it the default** / **Just this once**.
+6. Either answer is recorded in GBrain. "Default" rewrites the workflow (see `/workflows`); "just this once" logs a one-off. Both show on `/brain` under "What I've learned about how Tony works".
+
+Replies don't have to match the buttons: "nah not today" cancels, "make it 25 instead" edits in one step, "skip the email" drops a step. Real SMS can't render buttons, so texts get a short `(Yes / Change)` hint instead. Use **Reset demo** in the sidebar between rehearsals.
 
 ## Stack
 
@@ -68,13 +71,14 @@ Without Twilio keys, use the **phone mirror** on the right of the dashboard to s
 
 ## Brain seed
 
-Markdown in `brain-seed/` is the human-readable source of truth (also imported into GBrain):
+Markdown in `brain-seed/` is the pristine starting state. On first run it's copied to `data/brain/` (the live copy the agent edits and syncs to GBrain), and **Reset demo** restores it.
 
 - `company/tonys-pizzeria.md`
 - `inventory/*.md`
 - `appliances/*.md`
 - `suppliers/company-b.md`, `contacts/bob-pepsi.md`
-- `workflows/*.md`
+- `workflows/*.md` (usual quantities live in frontmatter, e.g. `default_qty`)
+- `preferences/owner-behavior.md` (routine changes and one-offs learned from Tony's replies)
 - `actions/log.md`
 
 Hello Hackathon.

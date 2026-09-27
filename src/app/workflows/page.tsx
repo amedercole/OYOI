@@ -10,24 +10,29 @@ type Workflow = {
   channel: string;
   supplier?: string;
   contact?: string;
-  content: string;
+  fm: Record<string, string | number>;
+  timeline: string[];
 };
 
 export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
 
   useEffect(() => {
-    fetch("/api/workflows")
-      .then((r) => r.json())
-      .then((d) => setWorkflows(d.workflows || []));
+    async function load() {
+      const res = await fetch("/api/workflows");
+      const data = await res.json();
+      setWorkflows(data.workflows || []);
+    }
+    load();
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
   }, []);
 
   return (
     <div>
       <h1 className="page-title">Enshrined workflows</h1>
       <p className="page-sub">
-        Company-specific playbooks the agent recalls before acting — reorder cheese online, email
-        Bob for Pepsi changes.
+        Tony&apos;s routines, stored in GBrain. When he changes one over text, it updates here.
       </p>
       <div className="grid-cards">
         {workflows.map((w) => (
@@ -44,6 +49,22 @@ export default function WorkflowsPage() {
               {w.supplier ? ` via ${w.supplier}` : ""}
               {w.contact ? ` → ${w.contact}` : ""}
             </p>
+            {w.fm.default_qty !== undefined && (
+              <p>
+                <strong>Usual order:</strong> {w.fm.default_qty} {w.fm.unit}
+                {w.fm.unit_price ? ` at $${Number(w.fm.unit_price).toFixed(2)}/${w.fm.unit}` : ""}
+              </p>
+            )}
+            {w.timeline.length > 0 && (
+              <>
+                <strong style={{ fontSize: "0.85rem" }}>History</strong>
+                <ul className="timeline">
+                  {w.timeline.slice(0, 4).map((entry, i) => (
+                    <li key={i}>{entry}</li>
+                  ))}
+                </ul>
+              </>
+            )}
           </div>
         ))}
       </div>

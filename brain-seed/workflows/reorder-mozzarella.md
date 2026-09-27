@@ -1,18 +1,24 @@
 ---
 id: reorder-mozzarella
-trigger: mozzarella qty below par
+trigger: mozzarella below par
 action: order
 channel: website
 supplier: company-b
+inventory: inventory/mozzarella
+product: Mozzarella
+sku: MOZ-20
+default_qty: 20
+unit: lbs
+unit_price: 4.5
 ---
 
 # Workflow: Reorder Mozzarella from Company B
 
 ## Compiled Truth
-**When** mozzarella inventory falls below par (15 lbs),
-**Then** propose ordering `reorder_qty` (20 lbs) from Company B's website.
-Estimated cost ~$90 (under $200 auto-confirm threshold once owner says yes).
-Steps: (1) propose action with cost (2) wait for YES (3) run browser order on `/supplier` (4) update inventory qty (5) log action.
+**When** mozzarella falls below par (15 lbs),
+**then** offer to order the usual 20 lbs from Company B's website at $4.50/lb.
+Steps: (1) text Tony the offer (2) wait for his go-ahead or changes (3) place the order on Company B's site (4) add the delivery to inventory (5) log the action.
+If Tony changes the order, ask whether the change should become the new routine.
 
 ## Timeline
-- 2026-09-15: Workflow enshrined after weekend stockout
+- 2026-09-15: Workflow enshrined after a weekend stockout

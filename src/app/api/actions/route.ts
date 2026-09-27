@@ -11,25 +11,26 @@ export async function GET() {
   return NextResponse.json({ actions: listActionRuns(50) });
 }
 
-/** Simulate an inbound owner SMS from the dashboard phone mirror */
+/** Simulate an inbound owner SMS (typed or a tapped quick-reply button) from the phone mirror. */
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const text = String(body.body || "").trim();
   if (!text) return NextResponse.json({ error: "body required" }, { status: 400 });
 
-  const from = getOwnerPhone() || "+15555550100";
-  const to = getTwilioPhone() || "+15555550199";
+  const from = getOwnerPhone();
 
   logMessage({
     id: randomUUID(),
     direction: "inbound",
     from_number: from,
-    to_number: to,
+    to_number: getTwilioPhone() || "oyoi",
     body: text,
   });
 
   const result = await handleInboundSms(from, text);
-  await sendSms(from, result.reply);
+  for (const reply of result.replies) {
+    await sendSms(from, reply.body, reply.quickReplies);
+  }
 
   return NextResponse.json(result);
 }

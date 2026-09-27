@@ -36,16 +36,18 @@ export async function POST(req: NextRequest) {
     body,
   });
 
-  // Twilio times out ~15s — return empty TwiML immediately, reply via REST
+  // Twilio times out after ~15s, so answer with empty TwiML now and reply via the REST API.
   setImmediate(() => {
     void (async () => {
       try {
         const result = await handleInboundSms(from, body);
-        await sendSms(from, result.reply);
+        for (const reply of result.replies) {
+          await sendSms(from, reply.body, reply.quickReplies);
+        }
       } catch (err) {
         console.error("[twilio/inbound] agent error", err);
         try {
-          await sendSms(from, "Sorry — hit a snag. Try again in a moment.");
+          await sendSms(from, "Sorry, hit a snag. Try again in a moment.");
         } catch {
           /* ignore */
         }

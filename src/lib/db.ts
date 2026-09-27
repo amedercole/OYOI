@@ -11,13 +11,20 @@ export type MessageRow = {
   from_number: string;
   to_number: string;
   body: string;
+  quick_replies: string[] | null;
   created_at: string;
 };
 
 export type ActionRunRow = {
   id: string;
   kind: string;
-  status: "awaiting_confirmation" | "running" | "done" | "failed";
+  status:
+    | "awaiting_confirmation"
+    | "awaiting_change_details"
+    | "running"
+    | "done"
+    | "failed"
+    | "cancelled";
   summary: string;
   payload: string;
   result: string | null;
@@ -60,24 +67,53 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_actions_status ON action_runs(status);
   `);
 
+  const cols = db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "quick_replies")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN quick_replies TEXT`);
+  }
+
   g.__oyoiDb = db;
   return db;
 }
 
-export function logMessage(msg: Omit<MessageRow, "created_at"> & { created_at?: string }) {
-  const db = getDb();
-  const created_at = msg.created_at ?? new Date().toISOString();
-  db.prepare(
-    `INSERT INTO messages (id, direction, from_number, to_number, body, created_at)
-     VALUES (@id, @direction, @from_number, @to_number, @body, @created_at)`
-  ).run({ ...msg, created_at });
-  return { ...msg, created_at };
+export function resetDb() {
+  const g = globalThis as unknown as GlobalDb;
+  g.__oyoiDb?.close();
+  g.__oyoiDb = undefined;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    fs.rmSync(`${DB_PATH}${suffix}`, { force: true });
+  }
+}
+
+export function logMessage(msg: {
+  id: string;
+  direction: MessageRow["direction"];
+  from_number: string;
+  to_number: string;
+  body: string;
+  quick_replies?: string[];
+}) {
+  const created_at = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO messages (id, direction, from_number, to_number, body, quick_replies, created_at)
+       VALUES (@id, @direction, @from_number, @to_number, @body, @quick_replies, @created_at)`
+    )
+    .run({
+      ...msg,
+      quick_replies: msg.quick_replies?.length ? JSON.stringify(msg.quick_replies) : null,
+      created_at,
+    });
 }
 
 export function listMessages(limit = 100): MessageRow[] {
-  return getDb()
+  const rows = getDb()
     .prepare(`SELECT * FROM messages ORDER BY created_at ASC LIMIT ?`)
-    .all(limit) as MessageRow[];
+    .all(limit) as Array<Omit<MessageRow, "quick_replies"> & { quick_replies: string | null }>;
+  return rows.map((r) => ({
+    ...r,
+    quick_replies: r.quick_replies ? (JSON.parse(r.quick_replies) as string[]) : null,
+  }));
 }
 
 export function createActionRun(input: {
@@ -141,10 +177,20 @@ export function listActionRuns(limit = 50): ActionRunRow[] {
     .all(limit) as ActionRunRow[];
 }
 
-export function getPendingConfirmation(): ActionRunRow | undefined {
+const PENDING_STATUSES = `('awaiting_confirmation', 'awaiting_change_details')`;
+
+export function getPendingAction(): ActionRunRow | undefined {
   return getDb()
     .prepare(
-      `SELECT * FROM action_runs WHERE status = 'awaiting_confirmation' ORDER BY created_at DESC LIMIT 1`
+      `SELECT * FROM action_runs WHERE status IN ${PENDING_STATUSES} ORDER BY created_at DESC LIMIT 1`
     )
     .get() as ActionRunRow | undefined;
+}
+
+export function cancelPendingActions() {
+  getDb()
+    .prepare(
+      `UPDATE action_runs SET status = 'cancelled', updated_at = ? WHERE status IN ${PENDING_STATUSES}`
+    )
+    .run(new Date().toISOString());
 }

@@ -1,6 +1,6 @@
 ---
 name: Pepsi Syrup
-qty: 2
+qty: 4
 unit: boxes
 par: 3
 supplier: pepsi-bob
@@ -11,9 +11,8 @@ reorder_qty: 4
 # Pepsi Syrup
 
 ## Compiled Truth
-Bag-in-box Pepsi syrup for fountain. Slightly below par (2 vs 3).
-Ordered via email to Bob the Pepsi rep — not website.
-Current delivery day: 15th of each month.
+Bag-in-box Pepsi syrup for the fountain. Par level is 3 boxes.
+Delivered by Bob the Pepsi rep on a standing monthly order; changes go through email, not a website.
 
 ## Timeline
-- 2026-09-10: Last delivery of 4 boxes on the 15th
+- 2026-09-15: Standing delivery of 4 boxes received

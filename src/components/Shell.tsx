@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Message = {
   id: string;
   direction: "inbound" | "outbound";
   body: string;
+  quick_replies: string[] | null;
   created_at: string;
 };
 
@@ -24,7 +25,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [checkinMsg, setCheckinMsg] = useState<string | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -37,19 +38,26 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refresh();
+    const first = setTimeout(refresh, 0);
     const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
   }, [refresh]);
 
-  async function sendSimulated() {
-    if (!draft.trim() || busy) return;
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages.length]);
+
+  async function send(text: string) {
+    if (!text.trim() || busy) return;
     setBusy(true);
     try {
       await fetch("/api/actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: draft }),
+        body: JSON.stringify({ body: text }),
       });
       setDraft("");
       await refresh();
@@ -60,23 +68,33 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   async function runCheckin() {
     setBusy(true);
-    setCheckinMsg(null);
     try {
-      const res = await fetch("/api/checkin", { method: "POST" });
-      const data = await res.json();
-      setCheckinMsg(data.text);
+      await fetch("/api/checkin", { method: "POST" });
       await refresh();
     } finally {
       setBusy(false);
     }
   }
 
+  async function resetDemo() {
+    setBusy(true);
+    try {
+      await fetch("/api/demo/reset", { method: "POST" });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const last = messages[messages.length - 1];
+  const buttons = last?.direction === "outbound" ? last.quick_replies ?? [] : [];
+
   return (
     <div className="app-shell">
       <aside className="side-nav">
         <div className="brand">
           <span className="brand-mark">OYOI</span>
-          <span className="brand-sub">Ops You Only Inbox</span>
+          <span className="brand-sub">Restaurant SMS Ops</span>
         </div>
         <nav>
           {NAV.map((item) => (
@@ -89,7 +107,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </Link>
           ))}
         </nav>
-        <p className="side-note">Demo restaurant: Tony&apos;s Pizzeria</p>
+        <div className="side-note">
+          <p>Demo restaurant: Tony&apos;s Pizzeria</p>
+          <button className="link-btn" onClick={resetDemo} disabled={busy}>
+            Reset demo
+          </button>
+        </div>
       </aside>
 
       <main className="main-pane">{children}</main>
@@ -104,8 +127,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             Run check-in
           </button>
         </div>
-        {checkinMsg && <div className="banner">{checkinMsg}</div>}
-        <div className="thread">
+        <div className="thread" ref={threadRef}>
           {messages.length === 0 && (
             <p className="muted empty">No messages yet. Run a check-in or text the agent.</p>
           )}
@@ -114,19 +136,34 @@ export function Shell({ children }: { children: React.ReactNode }) {
               key={m.id}
               className={m.direction === "inbound" ? "bubble inbound" : "bubble outbound"}
             >
-              <div>{m.body}</div>
+              <div className="bubble-body">{m.body}</div>
               <time>{new Date(m.created_at).toLocaleTimeString()}</time>
             </div>
           ))}
+          {buttons.length > 0 && (
+            <div className="quick-replies">
+              {buttons.map((label) => (
+                <button
+                  key={label}
+                  className="quick-reply"
+                  onClick={() => send(label)}
+                  disabled={busy}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {busy && <div className="typing">OYOI is typing…</div>}
         </div>
         <div className="composer">
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendSimulated()}
-            placeholder="Simulate owner SMS…"
+            onKeyDown={(e) => e.key === "Enter" && send(draft)}
+            placeholder="Text OYOI…"
           />
-          <button className="btn" onClick={sendSimulated} disabled={busy}>
+          <button className="btn" onClick={() => send(draft)} disabled={busy}>
             Send
           </button>
         </div>

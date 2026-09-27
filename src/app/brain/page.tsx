@@ -19,6 +19,7 @@ type PageMeta = {
 export default function BrainPage() {
   const [pages, setPages] = useState<PageMeta[]>([]);
   const [diffs, setDiffs] = useState<Diff[]>([]);
+  const [behavior, setBehavior] = useState<string[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -26,6 +27,7 @@ export default function BrainPage() {
       const data = await res.json();
       setPages(data.pages || []);
       setDiffs(data.diffs || []);
+      setBehavior(data.behavior || []);
     }
     load();
     const t = setInterval(load, 4000);
@@ -39,6 +41,15 @@ export default function BrainPage() {
         GBrain-backed company memory — inventory pages, workflows, and diffs of what the agent
         learned.
       </p>
+
+      <div className="panel learned" style={{ marginBottom: "2rem" }}>
+        <h3>What I&apos;ve learned about how Tony works</h3>
+        <ul className="timeline">
+          {behavior.map((entry, i) => (
+            <li key={i}>{entry}</li>
+          ))}
+        </ul>
+      </div>
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem" }}>Recent diffs</h2>
       <div style={{ display: "grid", gap: "0.85rem", marginBottom: "2rem" }}>
