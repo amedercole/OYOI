@@ -7,23 +7,24 @@ export type ChatMessage = {
   id: string;
   direction: "inbound" | "outbound";
   body: string;
-  channel: "web" | "sms";
-  created_at: string;
 };
 
-export type ConversationRow = {
+export type ChatSummary = {
+  id: string;
+  title: string;
+  kind: "web" | "text";
+  channel: string | null;
+  lastAt: number;
+  busy: boolean;
+};
+
+type ConversationRow = {
   id: string;
   title: string;
   surface: string;
-  surface_label: string | null;
-  speaker: string | null;
-  agent: string;
-  main: boolean;
   last_at: number;
-  postable: boolean;
   channel: string | null;
-  turn: { status: string };
-  unread: boolean;
+  turn: "running" | "queued" | "parked" | "idle";
 };
 
 export type InventoryItem = {
@@ -52,7 +53,6 @@ export type InventoryView = {
   checkup_requested: boolean;
 };
 
-const DASHBOARD_CHANNEL = "dashboard";
 const HOLD_MS = 90_000;
 
 function config() {
@@ -90,19 +90,16 @@ function agentText(verb: string, fields: string[]): string | null {
   return text || null;
 }
 
-function threadMessages(text: string, idPrefix: string, channel: ChatMessage["channel"]): ChatMessage[] {
+function threadMessages(text: string, idPrefix: string): ChatMessage[] {
   const messages: ChatMessage[] = [];
-  let seq = 0;
   for (const { verb, fields } of parseDirectives(text)) {
     if (verb === "since" || verb === "listen" || verb === "ask" || verb === "poll") break;
     const said = verb === "you" && fields[0] ? unescapeField(fields[0]) : agentText(verb, fields);
     if (said === null) continue;
     messages.push({
-      id: `${idPrefix}-${seq++}`,
+      id: `${idPrefix}-${messages.length}`,
       direction: verb === "you" ? "inbound" : "outbound",
       body: said,
-      channel,
-      created_at: new Date().toISOString(),
     });
   }
   return messages;
@@ -134,11 +131,7 @@ async function readStream(res: Response): Promise<string> {
   return res.text();
 }
 
-async function holdChat(
-  path: string,
-  body: string,
-  since?: { turnId: string; cursor: string }
-): Promise<{ says: string[]; yous: string[]; since?: { turnId: string; cursor: string }; done: boolean }> {
+async function holdChat(path: string, body: string, since?: { turnId: string; cursor: string }): Promise<string[]> {
   const { base } = config();
   const headers = authHeaders({ "content-type": "text/plain" });
   if (since) headers.set("x-ufo-since", `${since.turnId}:${since.cursor}`);
@@ -155,53 +148,54 @@ async function holdChat(
     const text = await readStream(res);
     const lines = parseDirectives(text);
     const says: string[] = [];
-    const yous: string[] = [];
     let nextSince: { turnId: string; cursor: string } | undefined;
     let done = false;
     let poll = false;
     for (const { verb, fields } of lines) {
       const said = agentText(verb, fields);
       if (said !== null) says.push(said);
-      if (verb === "you" && fields[0]) yous.push(unescapeField(fields[0]));
       if (verb === "since" && fields[0] && fields[1] !== undefined) {
         nextSince = { turnId: fields[0], cursor: fields[1] };
       }
       if (verb === "ask" || verb === "listen") done = true;
       if (verb === "poll") poll = true;
     }
-    if (poll && nextSince && !done) {
-      return holdChat(path, "", nextSince);
-    }
-    return { says, yous, since: nextSince, done: done || !poll };
+    if (poll && nextSince && !done) return [...says, ...(await holdChat(path, "", nextSince))];
+    return says;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function sendChat(text: string): Promise<{ reply: string }> {
-  const path = `/surface/ufo/${DASHBOARD_CHANNEL}`;
-  const { says } = await holdChat(path, text);
+export async function sendChat(channel: string, text: string): Promise<{ reply: string }> {
+  const says = await holdChat(`/surface/ufo/${encodeURIComponent(channel)}`, text);
   return { reply: says.join("\n\n").trim() };
 }
 
-export async function listConversations(): Promise<ConversationRow[]> {
+export async function listChats(): Promise<ChatSummary[]> {
   const { base } = config();
   const res = await fetch(`${base}/surface/ufo/conversations`, {
     headers: authHeaders(),
     cache: "no-store",
   });
-  const data = (await readStream(res).then((t) => JSON.parse(t))) as {
-    conversations: ConversationRow[];
-  };
-  return data.conversations ?? [];
+  const { conversations } = JSON.parse(await readStream(res)) as { conversations: ConversationRow[] };
+  return conversations
+    .filter((row) => row.surface === "sms" || (row.surface === "ufo" && row.channel !== null))
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      kind: row.surface === "sms" ? "text" : "web",
+      channel: row.channel,
+      lastAt: row.last_at,
+      busy: row.turn === "running" || row.turn === "queued",
+    }));
 }
 
 export async function readThread(conversationId: string): Promise<ChatMessage[]> {
-  return threadMessages(await replay(`/surface/ufo/conversation/${conversationId}`), conversationId, "sms");
-}
-
-export async function readDashboardThread(): Promise<ChatMessage[]> {
-  return threadMessages(await replay(`/surface/ufo/${DASHBOARD_CHANNEL}`), DASHBOARD_CHANNEL, "web");
+  return threadMessages(
+    await replay(`/surface/ufo/conversation/${encodeURIComponent(conversationId)}`),
+    conversationId
+  );
 }
 
 export async function getInventory(): Promise<InventoryView> {

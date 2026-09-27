@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { ChatSummary } from "@/lib/ufo";
 
 const NAV = [
   { href: "/", label: "Overview" },
@@ -23,7 +24,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
   const [chatUnread, setChatUnread] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const lastSeen = useRef<string | null>(null);
+  const lastSeen = useRef<number | null>(null);
   const debugBase = (process.env.NEXT_PUBLIC_UFO_BASE_URL || "http://127.0.0.1:8710").replace(
     /\/$/,
     ""
@@ -33,17 +34,13 @@ export function Shell({ children }: { children: ReactNode }) {
   const pollChat = useCallback(async () => {
     try {
       const res = await fetch("/api/chat");
-      const data = await res.json();
-      const msgs = [...(data.sms || []), ...(data.web || [])];
-      const last = msgs[msgs.length - 1];
-      if (!last) return;
-      if (pathname === "/chat") {
-        lastSeen.current = last.id;
+      const data = (await res.json()) as { chats?: ChatSummary[] };
+      const latest = Math.max(0, ...(data.chats ?? []).map((c) => c.lastAt));
+      if (pathname === "/chat" || lastSeen.current === null) {
+        lastSeen.current = latest;
         setChatUnread(false);
-      } else if (lastSeen.current && last.id !== lastSeen.current && last.direction === "outbound") {
+      } else if (latest > lastSeen.current) {
         setChatUnread(true);
-      } else if (!lastSeen.current) {
-        lastSeen.current = last.id;
       }
     } catch {
       /* ignore */
